@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "brats-seg"
+version = "0.1.0"
+description = "BraTS 2023 glioma segmentation coursework pipeline"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy",
+  "matplotlib",
+  "torch",
+  "nibabel",
+  "scipy",
+  "pandas",
+  "tqdm",
+  "PyYAML",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
