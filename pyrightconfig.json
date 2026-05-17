@@ -1,0 +1,7 @@
+{
+  "venvPath": "/home/tzh03",
+  "venv": "myvenv",
+  "include": ["src", "scripts", "tests"],
+  "extraPaths": ["src"],
+  "typeCheckingMode": "basic"
+}
