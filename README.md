@@ -1,6 +1,6 @@
 # BraTS 2023 Glioma Segmentation Project
 
-This repository implements the coursework pipeline for BraTS-based multi-modal MRI glioma segmentation using the local dataset at `/mnt/d/brats2023` and the ROCm-enabled Python environment at `/home/tzh03/myvenv`.
+This repository implements the coursework pipeline for BraTS-based multi-modal MRI glioma segmentation using the local dataset at `/mnt/d/brats2023` and the  Python environment with torch.
 
 ## Implemented scope
 
@@ -11,9 +11,9 @@ This repository implements the coursework pipeline for BraTS-based multi-modal M
 ## Quick start
 
 ```bash
-/home/tzh03/myvenv/bin/python -m pip install -e .
-/home/tzh03/myvenv/bin/python scripts/run_task1_analysis.py
-/home/tzh03/myvenv/bin/python scripts/train_model.py --model unet --epochs 3 --output-dir artifacts/baseline
-/home/tzh03/myvenv/bin/python scripts/train_model.py --model attention_unet --epochs 3 --output-dir artifacts/attention
-/home/tzh03/myvenv/bin/python scripts/evaluate_model.py --model attention_unet --checkpoint artifacts/attention/best_model.pt --output-dir artifacts/eval_attention
+python -m pip install -e .
+python scripts/run_task1_analysis.py
+python scripts/train_model.py --model unet --epochs 3 --output-dir artifacts/baseline
+python scripts/train_model.py --model attention_unet --epochs 3 --output-dir artifacts/attention
+python scripts/evaluate_model.py --model attention_unet --checkpoint artifacts/attention/best_model.pt --output-dir artifacts/eval_attention
 ```
