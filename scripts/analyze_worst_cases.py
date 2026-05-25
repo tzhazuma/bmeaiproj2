@@ -86,13 +86,15 @@ def main() -> None:
 
     model = UNet2D() if args.model == "unet" else AttentionUNet2D()
     device = create_device()
-    model.load_state_dict(torch.load(args.checkpoint, map_location=device))
+    model.load_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=False))
     model.to(device)
 
     rows: list[CaseMetricRow] = []
+    results_cache: dict[str, object] = {}
     for case in splits["test"]:
         processed = preprocess_case(case)
-        result = predict_case_regions(model, processed["image"], processed["regions"], device)
+        result = predict_case_regions(model, processed["image"], processed["regions"], device, case_id=case.case_id)
+        results_cache[case.case_id] = result
         mean_dice = float(np.mean(list(result.dice.values())))
         reason, heuristics = compute_failure_reason(processed["image"], processed["seg"])
         row: CaseMetricRow = {
@@ -120,9 +122,7 @@ def main() -> None:
 
     for item in worst_cases:
         case_id = str(item["case_id"])
-        case = next(case for case in splits["test"] if case.case_id == case_id)
-        processed = preprocess_case(case)
-        result = predict_case_regions(model, processed["image"], processed["regions"], device)
+        result = results_cache[case_id]
         slice_index = choose_representative_slice(result.target)
         save_prediction_figure(
             result.image,

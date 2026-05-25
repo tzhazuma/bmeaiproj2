@@ -52,8 +52,8 @@ def discover_cases(data_root: str | Path = DEFAULT_DATA_ROOT) -> list[BraTSCase]
     cases: list[BraTSCase] = []
     for case_dir in case_dirs:
         case_id = case_dir.name
-        modality_paths = {modality: case_dir / f"{case_id}-{modality}.nii" for modality in MODALITIES}
-        seg_path = case_dir / f"{case_id}-seg.nii"
+        modality_paths = {modality: case_dir / f"{case_id}-{modality}.nii.gz" for modality in MODALITIES}
+        seg_path = case_dir / f"{case_id}-seg.nii.gz"
         if not all(path.exists() for path in modality_paths.values()) or not seg_path.exists():
             continue
         cases.append(BraTSCase(case_id=case_id, case_dir=case_dir, modality_paths=modality_paths, seg_path=seg_path))
@@ -67,7 +67,7 @@ def stable_split_cases(
 ) -> dict[str, list[BraTSCase]]:
     if not 0 < train_ratio < 1 or not 0 < val_ratio < 1 or train_ratio + val_ratio >= 1:
         raise ValueError("train_ratio and val_ratio must define a valid three-way split")
-    ordered = sorted(cases, key=lambda case: hashlib.sha1(case.case_id.encode("utf-8")).hexdigest())
+    ordered = sorted(cases, key=lambda case: hashlib.new("sha1", case.case_id.encode("utf-8")).hexdigest())
     total = len(ordered)
     train_end = int(total * train_ratio)
     val_end = train_end + int(total * val_ratio)
@@ -208,8 +208,84 @@ class BraTSSliceDataset(Dataset[dict[str, torch.Tensor]]):
         target = pad_or_crop_2d(target, self.target_shape)
         image, target = self.augmentor(image, target)
         return {
-            "image": Tensor(image.tolist()),
-            "target": Tensor(target.tolist()),
+            "image": torch.from_numpy(image).float(),
+            "target": torch.from_numpy(target).float(),
+            "case_id": case_id,
+            "slice_index": slice_index,
+        }
+
+
+class BraTSMultiSliceDataset(Dataset[dict[str, torch.Tensor]]):
+    """2.5D dataset: stacks N consecutive 2D slices as multi-channel input.
+
+    Each item returns N consecutive slices stacked along the channel dimension
+    (N * 4 modalities = N*4 input channels). The target is the segmentation
+    of the middle slice. Boundary slices are padded by replicating the edge slice.
+
+    Args:
+        cases: List of BraTSCase objects for this split.
+        num_slices: Number of consecutive slices to stack (default 3).
+        include_empty: If True, include slices with no tumor.
+        augment: If True, apply data augmentation.
+        cache_size: Number of preprocessed cases to keep in memory.
+        target_shape: (H, W) to crop/pad slices to.
+    """
+
+    def __init__(
+        self,
+        cases: list[BraTSCase],
+        num_slices: int = 3,
+        include_empty: bool = False,
+        augment: bool = False,
+        cache_size: int = 2,
+        target_shape: tuple[int, int] = (160, 160),
+    ) -> None:
+        self.num_slices = num_slices
+        self.half = num_slices // 2
+        self.cases = {case.case_id: case for case in cases}
+        self.records = build_slice_records(cases, include_empty=include_empty)
+        self.augmentor = SliceAugmentor(enabled=augment)
+        self.cache: OrderedDict[str, ProcessedCase] = OrderedDict()
+        self.cache_size = cache_size
+        self.target_shape = target_shape
+
+    def __len__(self) -> int:
+        return len(self.records)
+
+    def _get_case(self, case_id: str) -> ProcessedCase:
+        if case_id in self.cache:
+            cached = self.cache.pop(case_id)
+            self.cache[case_id] = cached
+            return cached
+        processed = preprocess_case(self.cases[case_id])
+        self.cache[case_id] = processed
+        while len(self.cache) > self.cache_size:
+            self.cache.popitem(last=False)
+        return processed
+
+    def __getitem__(self, index: int) -> dict[str, torch.Tensor | str | int]:
+        record = self.records[index]
+        case_id = record["case_id"]
+        slice_index = record["slice_index"]
+        processed = self._get_case(case_id)
+
+        total_slices = processed["image"].shape[1]
+        image_stack = []
+        for offset in range(-self.half, self.half + 1):
+            idx = min(max(slice_index + offset, 0), total_slices - 1)
+            slc = processed["image"][:, idx, :, :]
+            slc = pad_or_crop_2d(slc, self.target_shape)
+            image_stack.append(slc)
+
+        target = processed["regions"][:, slice_index, :, :]
+        target = pad_or_crop_2d(target, self.target_shape)
+
+        stacked = np.concatenate(image_stack, axis=0)
+        stacked, target = self.augmentor(stacked, target)
+
+        return {
+            "image": torch.from_numpy(stacked).float(),
+            "target": torch.from_numpy(target).float(),
             "case_id": case_id,
             "slice_index": slice_index,
         }

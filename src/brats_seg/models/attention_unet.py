@@ -35,11 +35,7 @@ class AttentionUpBlock(nn.Module):
         diff_x = skip.size(-1) - x.size(-1)
         x = nn.functional.pad(x, [diff_x // 2, diff_x - diff_x // 2, diff_y // 2, diff_y - diff_y // 2])
         skip = self.attn(x, skip)
-        return self.conv(_concat_channels(skip, x))
-
-
-def _concat_channels(left: Tensor, right: Tensor) -> Tensor:
-    return torch.ops.aten.cat.default([left, right], 1)
+        return self.conv(torch.cat([skip, x], dim=1))
 
 
 class AttentionUNet2D(nn.Module):

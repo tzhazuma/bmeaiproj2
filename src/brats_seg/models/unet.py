@@ -41,13 +41,8 @@ class UpBlock(nn.Module):
         diff_y = skip.size(-2) - x.size(-2)
         diff_x = skip.size(-1) - x.size(-1)
         x = nn.functional.pad(x, [diff_x // 2, diff_x - diff_x // 2, diff_y // 2, diff_y - diff_y // 2])
-        x = nn.functional.pad(x, [diff_x // 2, diff_x - diff_x // 2, diff_y // 2, diff_y - diff_y // 2])
-        x = _concat_channels(skip, x)
+        x = torch.cat([skip, x], dim=1)
         return self.conv(x)
-
-
-def _concat_channels(left: Tensor, right: Tensor) -> Tensor:
-    return torch.ops.aten.cat.default([left, right], 1)
 
 
 class UNet2D(nn.Module):

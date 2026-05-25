@@ -43,13 +43,13 @@ def hd95_per_region(prediction: np.ndarray, target: np.ndarray) -> dict[str, flo
             scores[name] = 0.0
             continue
         if not np.any(pred) or not np.any(truth):
-            scores[name] = float("inf")
+            scores[name] = -1.0
             continue
         d1 = _surface_distances(pred, truth)
         d2 = _surface_distances(truth, pred)
         joined = np.concatenate((d1, d2))
         if np.isinf(joined).any():
-            scores[name] = float("inf")
+            scores[name] = -1.0
             continue
         scores[name] = float(np.percentile(joined, 95))
     return scores

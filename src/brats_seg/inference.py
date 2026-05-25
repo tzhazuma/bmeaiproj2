@@ -26,6 +26,7 @@ def predict_case_regions(
     image_volume: np.ndarray,
     target_volume: np.ndarray,
     device: str,
+    case_id: str = "",
     target_shape: tuple[int, int] = (160, 160),
     threshold: float = 0.5,
 ) -> CasePredictionResult:
@@ -39,12 +40,12 @@ def predict_case_regions(
         target = pad_or_crop_2d(target_volume[:, slice_index], target_shape)
         aligned_image[:, slice_index] = image
         aligned_target[:, slice_index] = target.astype(np.uint8)
-        tensor = Tensor(image.tolist()).unsqueeze(0).to(device=device)
+        tensor = torch.from_numpy(image).float().unsqueeze(0).to(device=device)
         logits = model(tensor)
         pred = threshold_predictions(logits, threshold=threshold)[0]
         prediction[:, slice_index] = pred
     return CasePredictionResult(
-        case_id="",
+        case_id=case_id,
         image=aligned_image,
         prediction=prediction,
         target=aligned_target,

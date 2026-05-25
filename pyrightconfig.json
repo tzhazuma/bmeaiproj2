@@ -1,6 +1,6 @@
 {
-  "venvPath": "/home/tzh03",
-  "venv": "myvenv",
+  "venvPath": "/home/azuma/bmeaiproj2",
+  "venv": ".venv",
   "include": ["src", "scripts", "tests"],
   "extraPaths": ["src"],
   "typeCheckingMode": "basic"

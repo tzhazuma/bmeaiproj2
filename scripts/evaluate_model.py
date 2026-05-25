@@ -42,21 +42,18 @@ def main() -> None:
     test_loader = DataLoader(test_dataset, batch_size=8, shuffle=False, num_workers=0)
     model = UNet2D() if args.model == "unet" else AttentionUNet2D()
     device = create_device()
-    model.load_state_dict(torch.load(args.checkpoint, map_location=device))
+    model.load_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=False))
     model.to(device)
     summary = evaluate_model(model, test_loader, device)
     (output_dir / "metrics.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
+    from brats_seg.inference import predict_case_regions
+
     sample_case = splits["test"][0]
     processed = preprocess_case(sample_case)
+    result = predict_case_regions(model, processed["image"], processed["regions"], device, case_id=sample_case.case_id)
     slice_index = choose_representative_slice(processed["regions"])
-    image = Tensor(processed["image"][:, slice_index].tolist()).unsqueeze(0).to(device=device)
-    with torch.no_grad():
-        logits = model(image)
-    pred = threshold_predictions(logits)[0]
-    prediction_volume = np.zeros_like(processed["regions"])
-    prediction_volume[:, slice_index] = pred
-    save_prediction_figure(processed["image"], processed["regions"], prediction_volume, output_dir / f"{sample_case.case_id}_prediction.png", slice_index)
+    save_prediction_figure(processed["image"], processed["regions"], result.prediction, output_dir / f"{sample_case.case_id}_prediction.png", slice_index)
 
 
 if __name__ == "__main__":

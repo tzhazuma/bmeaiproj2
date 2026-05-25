@@ -18,3 +18,6 @@ docs/slides/*.nav
 docs/slides/*.out
 docs/slides/*.snm
 docs/slides/*.toc
+data/
+artifacts/
+.venv/
