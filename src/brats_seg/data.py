@@ -215,6 +215,75 @@ class BraTSSliceDataset(Dataset[dict[str, torch.Tensor]]):
         }
 
 
+class CachedBraTSSliceDataset(Dataset[dict[str, torch.Tensor]]):
+    """Slice dataset that loads preprocessed cases from disk cache instead of re-processing.
+
+    Uses .npz files pre-generated via preprocess_case(). Dramatically faster than
+    re-running nibabel load + z-score + crop on every epoch.
+    """
+
+    def __init__(
+        self,
+        cases: list[BraTSCase],
+        cache_dir: str | Path,
+        include_empty: bool = False,
+        augment: bool = False,
+        cache_size: int = 8,
+        target_shape: tuple[int, int] = (160, 160),
+    ) -> None:
+        self.cases = {case.case_id: case for case in cases}
+        self.cache_dir = Path(cache_dir)
+        self.records = build_slice_records(cases, include_empty=include_empty)
+        self.augmentor = SliceAugmentor(enabled=augment)
+        self.mem_cache: OrderedDict[str, ProcessedCase] = OrderedDict()
+        self.cache_size = cache_size
+        self.target_shape = target_shape
+
+        self._available = {
+            p.stem.replace("-seg", "").split(".npz")[0]
+            for p in self.cache_dir.glob("*.npz")
+        }
+
+    def __len__(self) -> int:
+        return len(self.records)
+
+    def _get_case(self, case_id: str) -> ProcessedCase:
+        if case_id in self.mem_cache:
+            cached = self.mem_cache.pop(case_id)
+            self.mem_cache[case_id] = cached
+            return cached
+        cache_path = self.cache_dir / f"{case_id}.npz"
+        data = np.load(str(cache_path))
+        processed: ProcessedCase = {
+            "image": data["image"].astype(np.float32),
+            "seg": data["seg"].astype(np.int16),
+            "regions": data["regions"].astype(np.float32),
+            "bbox": BoundingBox(0, 0, 0, 0, 0, 0),
+        }
+        data.close()
+        self.mem_cache[case_id] = processed
+        while len(self.mem_cache) > self.cache_size:
+            self.mem_cache.popitem(last=False)
+        return processed
+
+    def __getitem__(self, index: int) -> dict[str, torch.Tensor | str | int]:
+        record = self.records[index]
+        case_id = record["case_id"]
+        slice_index = record["slice_index"]
+        processed = self._get_case(case_id)
+        image = processed["image"][:, slice_index, :, :]
+        target = processed["regions"][:, slice_index, :, :]
+        image = pad_or_crop_2d(image, self.target_shape)
+        target = pad_or_crop_2d(target, self.target_shape)
+        image, target = self.augmentor(image, target)
+        return {
+            "image": torch.from_numpy(image).float(),
+            "target": torch.from_numpy(target).float(),
+            "case_id": case_id,
+            "slice_index": slice_index,
+        }
+
+
 class BraTSMultiSliceDataset(Dataset[dict[str, torch.Tensor]]):
     """2.5D dataset: stacks N consecutive 2D slices as multi-channel input.
 

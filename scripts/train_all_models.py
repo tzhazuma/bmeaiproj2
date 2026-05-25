@@ -25,6 +25,7 @@ from brats_seg.constants import DEFAULT_DATA_ROOT
 from brats_seg.data import (
     BraTSMultiSliceDataset,
     BraTSSliceDataset,
+    CachedBraTSSliceDataset,
     discover_cases,
     limit_cases,
     load_split_manifest,
@@ -279,6 +280,7 @@ def main() -> None:
     parser.add_argument("--splits", default="", help="Path to a pre-saved splits manifest")
     parser.add_argument("--include-empty", action="store_true", help="Include empty slices in training")
     parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--cache-dir", default="/tmp/brats_preprocessed", help="Use preprocessed cache dir for fast loading")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -303,8 +305,18 @@ def main() -> None:
             splits["val"], num_slices=multi_slice, include_empty=False, augment=False
         )
     else:
-        train_dataset = BraTSSliceDataset(splits["train"], include_empty=include_empty, augment=True)
-        val_dataset = BraTSSliceDataset(splits["val"], include_empty=False, augment=False)
+        cache_dir = args.cache_dir
+        use_cache = Path(cache_dir).exists() if cache_dir else False
+        if use_cache:
+            train_dataset = CachedBraTSSliceDataset(
+                splits["train"], cache_dir=cache_dir, include_empty=include_empty, augment=True, cache_size=8
+            )
+            val_dataset = CachedBraTSSliceDataset(
+                splits["val"], cache_dir=cache_dir, include_empty=False, augment=False, cache_size=8
+            )
+        else:
+            train_dataset = BraTSSliceDataset(splits["train"], include_empty=include_empty, augment=True)
+            val_dataset = BraTSSliceDataset(splits["val"], include_empty=False, augment=False)
 
     train_loader = DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers
