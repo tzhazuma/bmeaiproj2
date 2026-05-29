@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import matplotlib.pyplot as plt
 
 from brats_seg.constants import DEFAULT_DATA_ROOT, MODALITIES
 from brats_seg.data import discover_cases, limit_cases, preprocess_case, save_split_manifest, stable_split_cases, summarize_dataset
@@ -73,16 +74,35 @@ def main() -> None:
         regions = processed["regions"]
         save_multimodal_figure(image, regions, output_dir / "figures" / f"{case.case_id}.png")
         total_exported += export_processed_slices(output_dir / "processed_slices", case.case_id, image, regions)
-        contrast_rows.extend(compute_contrast_statistics(image, seg))
+        rows = compute_contrast_statistics(image, seg)
+        for r in rows:
+            r["case_id"] = case.case_id
+        contrast_rows.extend(rows)
 
     with (output_dir / "contrast_analysis.csv").open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["modality", "tumor_mean", "healthy_mean", "contrast_gap"])
+        writer = csv.DictWriter(handle, fieldnames=["case_id", "modality", "tumor_mean", "healthy_mean", "contrast_gap"])
         writer.writeheader()
         writer.writerows(contrast_rows)
 
     modality_scores: dict[str, list[float]] = {modality: [] for modality in MODALITIES}
     for row in contrast_rows:
         modality_scores[str(row["modality"])].append(float(row["contrast_gap"]))
+
+    # save a simple modality-level contrast plot (mean +/- std)
+    means = [float(np.mean(modality_scores[m])) if modality_scores[m] else 0.0 for m in MODALITIES]
+    stds = [float(np.std(modality_scores[m])) if modality_scores[m] else 0.0 for m in MODALITIES]
+    fig, ax = plt.subplots(figsize=(6, 4))
+    x = np.arange(len(MODALITIES))
+    colors = ["#4C72B0", "#55A868", "#C44E52", "#8172B2"]
+    ax.bar(x, means, yerr=stds, capsize=6, color=colors[: len(MODALITIES)])
+    ax.set_xticks(x)
+    ax.set_xticklabels([m.upper() for m in MODALITIES])
+    ax.set_ylabel("Contrast gap (ET mean - healthy mean)")
+    ax.set_title("Enhancing tumor contrast by modality")
+    fig.tight_layout()
+    fig.savefig(output_dir / "contrast_by_modality.png", dpi=180, bbox_inches="tight")
+    plt.close(fig)
+
     best_modality = max(modality_scores.items(), key=lambda item: np.mean(item[1]) if item[1] else float("-inf"))[0]
     (output_dir / "task1_summary.json").write_text(
         json.dumps({"best_et_contrast_modality": best_modality, "exported_slices": total_exported}, indent=2),
