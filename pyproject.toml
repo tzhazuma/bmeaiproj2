@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "brats-seg"
 version = "0.1.0"
 description = "BraTS 2023 glioma segmentation coursework pipeline"
-requires-python = ">=3.11"
+requires-python = ">=3.10" #change the python version according to the local environment
 dependencies = [
   "numpy",
   "matplotlib",

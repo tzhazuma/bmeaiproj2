@@ -49,7 +49,7 @@ def export_processed_slices(output_dir: Path, case_id: str, image: np.ndarray, r
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data-root", default=DEFAULT_DATA_ROOT)
+    parser.add_argument("--data-root", default=DEFAULT_DATA_ROOT)  #change the place of dataset according to the local environment
     parser.add_argument("--output-dir", default="artifacts/task1")
     parser.add_argument("--num-examples", type=int, default=3)
     parser.add_argument("--max-cases", type=int, default=0)

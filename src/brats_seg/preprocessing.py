@@ -46,7 +46,7 @@ def canonicalize_segmentation(segmentation: np.ndarray) -> np.ndarray:
     return seg
 
 
-def segmentation_to_regions(segmentation: np.ndarray) -> np.ndarray:
+def segmentation_to_regions(segmentation: np.ndarray) -> np.ndarray:  # convert the segmentation map to three binary masks for the three regions of interest (WT, TC, ET)
     seg = canonicalize_segmentation(segmentation)
     wt = seg > 0
     tc = np.isin(seg, (1, 4))

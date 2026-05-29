@@ -31,7 +31,7 @@ def save_multimodal_figure(
         axes[idx].set_title(modality.upper())
         axes[idx].axis("off")
     fig.tight_layout()
-    fig.savefig(output_path, dpi=180, bbox_inches="tight")
+    fig.savefig(str(output_path), dpi=180, bbox_inches="tight")
     plt.close(fig)
     return output_path
 
@@ -63,7 +63,7 @@ def save_prediction_figure(
     axes[2, 0].set_title("T2W")
     axes[2, 0].axis("off")
     fig.tight_layout()
-    fig.savefig(output_path, dpi=180, bbox_inches="tight")
+    fig.savefig(str(output_path), dpi=180, bbox_inches="tight")
     plt.close(fig)
     return output_path
 
@@ -80,6 +80,6 @@ def save_loss_curve(history: dict[str, list[float]], output_path: str | Path) ->
     ax.legend()
     ax.grid(alpha=0.3)
     fig.tight_layout()
-    fig.savefig(output_path, dpi=180, bbox_inches="tight")
+    fig.savefig(str(output_path), dpi=180, bbox_inches="tight")
     plt.close(fig)
     return output_path

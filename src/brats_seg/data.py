@@ -52,8 +52,8 @@ def discover_cases(data_root: str | Path = DEFAULT_DATA_ROOT) -> list[BraTSCase]
     cases: list[BraTSCase] = []
     for case_dir in case_dirs:
         case_id = case_dir.name
-        modality_paths = {modality: case_dir / f"{case_id}-{modality}.nii.gz" for modality in MODALITIES}
-        seg_path = case_dir / f"{case_id}-seg.nii.gz"
+        modality_paths = {modality: case_dir / f"{case_id}-{modality}.nii" for modality in MODALITIES}
+        seg_path = case_dir / f"{case_id}-seg.nii"
         if not all(path.exists() for path in modality_paths.values()) or not seg_path.exists():
             continue
         cases.append(BraTSCase(case_id=case_id, case_dir=case_dir, modality_paths=modality_paths, seg_path=seg_path))
@@ -101,7 +101,7 @@ def load_case_arrays(case: BraTSCase) -> tuple[np.ndarray, np.ndarray]:
     return np.stack(volumes, axis=0), seg
 
 
-def preprocess_case(case: BraTSCase, crop_margin: int = 5) -> ProcessedCase:
+def preprocess_case(case: BraTSCase, crop_margin: int = 5) -> ProcessedCase:  # Here is the preprocess function pipeline
     volumes, seg = load_case_arrays(case)
     normalized = np.stack([zscore_normalize(channel) for channel in volumes], axis=0)
     bbox = compute_foreground_bbox(normalized, margin=crop_margin)
