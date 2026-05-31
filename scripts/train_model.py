@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 from pathlib import Path
 
 from torch.utils.data import DataLoader
 
-from brats_seg.constants import DEFAULT_DATA_ROOT
+from brats_seg.constants import DEFAULT_DATA_ROOT, MODALITIES, REGION_NAMES
 from brats_seg.data import (
     CachedBraTSSliceDataset,
     CachedRandomAugmentedSliceDataset,
@@ -16,7 +17,7 @@ from brats_seg.data import (
     save_split_manifest,
     stable_split_cases,
 )
-from brats_seg.models import AttentionUNet2D, UNet2D
+from brats_seg.models import AttentionUNet2D, RegionModalityAttentionUNet2D, UNet2D
 from brats_seg.training import TrainConfig, fit
 from brats_seg.visualization import save_loss_curve
 
@@ -26,7 +27,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-root", default=DEFAULT_DATA_ROOT)
     parser.add_argument("--output-dir", default="artifacts/baseline")
-    parser.add_argument("--model", choices=("unet", "attention_unet"), default="unet")
+    parser.add_argument("--model", choices=("unet", "attention_unet", "modality_attention_unet"), default="unet")
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=128) # batch size should be large enough to ensure stable training, but notice the GPU memory limit.
     parser.add_argument("--include-empty", action="store_true")
@@ -67,9 +68,21 @@ def main() -> None:
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=0)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=0)
 
-    model = UNet2D() if args.model == "unet" else AttentionUNet2D()
+    if args.model == "unet":
+        model = UNet2D()
+    elif args.model == "attention_unet":
+        model = AttentionUNet2D()
+    else:
+        model = RegionModalityAttentionUNet2D()
     history = fit(model, train_loader, val_loader, output_dir, TrainConfig(epochs=args.epochs, batch_size=args.batch_size))
     save_loss_curve(history, output_dir / "loss_curve.png")
+    if isinstance(model, RegionModalityAttentionUNet2D):
+        attention = model.modality_attention().detach().cpu().numpy()
+        payload = {
+            region: {modality: float(attention[region_index, modality_index]) for modality_index, modality in enumerate(MODALITIES)}
+            for region_index, region in enumerate(REGION_NAMES)
+        }
+        (output_dir / "learned_modality_attention.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 if __name__ == "__main__":
