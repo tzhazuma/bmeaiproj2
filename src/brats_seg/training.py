@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +15,9 @@ from tqdm import tqdm
 
 from .losses import dice_bce_loss
 from .metrics import dice_per_region, hd95_per_region, threshold_predictions
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -103,6 +107,13 @@ def fit(
     history = {"train_loss": [], "val_loss": []}
     best_val = float("inf")
     best_metrics: EvalSummary = {"loss": 0.0, "dice": {}, "hd95": {}}
+    logger.info(
+        "Starting training: device=%s, epochs=%d, batch_size=%d, lr=%.3g",
+        device,
+        config.epochs,
+        config.batch_size,
+        config.learning_rate,
+    )
     for epoch in range(1, config.epochs + 1):
         train_loss = run_epoch(model, train_loader, optimizer, device)
         val_summary = evaluate_model(model, val_loader, device, threshold=config.threshold)
@@ -111,12 +122,25 @@ def fit(
         history["val_loss"].append(val_loss)
         scheduler.step(val_loss)
         _append_history_row(output_dir / "history.csv", epoch, train_loss, val_loss, val_summary)
+        dice = val_summary["dice"]
+        logger.info(
+            "Epoch %d/%d | train_loss=%.4f | val_loss=%.4f | dice(WT=%.4f, TC=%.4f, ET=%.4f)",
+            epoch,
+            config.epochs,
+            train_loss,
+            val_loss,
+            dice.get("WT", 0.0),
+            dice.get("TC", 0.0),
+            dice.get("ET", 0.0),
+        )
         if val_loss < best_val:
             best_val = val_loss
             best_metrics = val_summary
             torch.save(model.state_dict(), output_dir / "best_model.pt")
+            logger.info("New best checkpoint saved: val_loss=%.4f", best_val)
     (output_dir / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
     (output_dir / "best_metrics.json").write_text(json.dumps(best_metrics, indent=2), encoding="utf-8")
+    logger.info("Training finished. Best val_loss=%.4f", best_val)
     return history
 
 

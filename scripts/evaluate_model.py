@@ -11,7 +11,6 @@ from torch.utils.data import DataLoader
 
 from brats_seg.constants import DEFAULT_DATA_ROOT
 from brats_seg.data import BraTSSliceDataset, discover_cases, limit_cases, load_split_manifest, preprocess_case, save_split_manifest, stable_split_cases
-from brats_seg.metrics import threshold_predictions
 from brats_seg.models import AttentionUNet2D, UNet2D
 from brats_seg.training import create_device, evaluate_model
 from brats_seg.visualization import choose_representative_slice
@@ -38,7 +37,7 @@ def main() -> None:
         splits = stable_split_cases(cases)
         save_split_manifest(splits, output_dir / "splits.json")
 
-    test_dataset = BraTSSliceDataset(splits["test"], include_empty=False, augment=False)
+    test_dataset = BraTSSliceDataset(splits["test"], include_empty=False, augment=False)  # evaluation is based on testset instead of validation set.
     test_loader = DataLoader(test_dataset, batch_size=8, shuffle=False, num_workers=0)
     model = UNet2D() if args.model == "unet" else AttentionUNet2D()
     device = create_device()
