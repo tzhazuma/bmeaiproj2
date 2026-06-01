@@ -17,7 +17,7 @@ class RegionModalityAttentionUNet2D(nn.Module):
         self,
         in_channels: int = 4,
         out_channels: int = 3,
-        features: tuple[int, ...] = (32, 64, 128, 256),
+        features: tuple[int, ...] = (8, 16, 32, 64, 128, 256),
     ) -> None:
         super().__init__()
         self.modality_logits = nn.Parameter(torch.zeros(out_channels, in_channels))

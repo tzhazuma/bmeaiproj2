@@ -35,6 +35,7 @@ def main() -> None:
     parser.add_argument("--max-cases", type=int, default=0)
     parser.add_argument("--cache-dir", default="")
     parser.add_argument("--aug-samples-per-slice", type=int, default=1)
+    parser.add_argument("--loss", choices=("dice_bce", "dice_focal"), default="dice_bce")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -74,7 +75,13 @@ def main() -> None:
         model = AttentionUNet2D()
     else:
         model = RegionModalityAttentionUNet2D()
-    history = fit(model, train_loader, val_loader, output_dir, TrainConfig(epochs=args.epochs, batch_size=args.batch_size))
+    history = fit(
+        model,
+        train_loader,
+        val_loader,
+        output_dir,
+        TrainConfig(epochs=args.epochs, batch_size=args.batch_size, loss=args.loss),
+    )
     save_loss_curve(history, output_dir / "loss_curve.png")
     if isinstance(model, RegionModalityAttentionUNet2D):
         attention = model.modality_attention().detach().cpu().numpy()

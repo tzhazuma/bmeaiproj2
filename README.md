@@ -15,8 +15,8 @@ python -m pip install -e .
 python scripts/run_task1_analysis.py
 python scripts/prepare_cache.py --cache-dir artifacts/preprocessed_cache --slices-per-case 32 --overwrite
 python scripts/train_model.py --model unet --epochs 45 --output-dir artifacts/baseline --batch-size 128
-python scripts/train_model.py --model attention_unet --epochs 10 --output-dir artifacts/attention --batch-size 32
-python scripts/train_model.py --model modality_attention_unet --epochs 10 --output-dir artifacts/modality_attention_unet --aug-samples-per-slice 2
+python scripts/train_model.py --model attention_unet --epochs 10 --output-dir artifacts/attention --batch-size 32 --loss `dice_bce|dice_focal`
+python scripts/train_model.py --model modality_attention_unet --epochs 10 --output-dir artifacts/modality_attention_unet  --batch-size 32
 python scripts/visualize_predictions.py --model unet --checkpoint artifacts/baseline/best_model.pt --splits artifacts/preprocessed_cache/splits.json --output-dir artifacts/prediction_examples
 python scripts/evaluate_model.py --model attention_unet --checkpoint artifacts/attention/best_model.pt --output-dir artifacts/eval_attention
 ```

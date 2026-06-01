@@ -39,18 +39,22 @@ class AttentionUpBlock(nn.Module):
 
 
 class AttentionUNet2D(nn.Module):
-    def __init__(self, in_channels: int = 4, out_channels: int = 3, features: tuple[int, ...] = (32, 64, 128, 256)) -> None:
+    def __init__(self, in_channels: int = 4, out_channels: int = 3, features: tuple[int, ...] = (8, 16, 32, 64, 128, 256)) -> None:
         super().__init__()
         self.stem = DoubleConv(in_channels, features[0])
         self.down1 = DownBlock(features[0], features[1])
         self.down2 = DownBlock(features[1], features[2])
         self.down3 = DownBlock(features[2], features[3])
-        self.bottleneck = DoubleConv(features[3], features[3] * 2)
+        self.down4 = DownBlock(features[3], features[4])
+        self.down5 = DownBlock(features[4], features[5])
         self.pool = nn.MaxPool2d(2)
-        self.up1 = AttentionUpBlock(features[3] * 2, features[3], features[3])
-        self.up2 = AttentionUpBlock(features[3], features[2], features[2])
-        self.up3 = AttentionUpBlock(features[2], features[1], features[1])
-        self.up4 = AttentionUpBlock(features[1], features[0], features[0])
+        self.bottleneck = DoubleConv(features[5], features[5] * 2)
+        self.up1 = AttentionUpBlock(features[5] * 2, features[5], features[5])
+        self.up2 = AttentionUpBlock(features[5], features[4], features[4])
+        self.up3 = AttentionUpBlock(features[4], features[3], features[3])
+        self.up4 = AttentionUpBlock(features[3], features[2], features[2])
+        self.up5 = AttentionUpBlock(features[2], features[1], features[1])
+        self.up6 = AttentionUpBlock(features[1], features[0], features[0])
         self.head = nn.Conv2d(features[0], out_channels, kernel_size=1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -58,9 +62,13 @@ class AttentionUNet2D(nn.Module):
         x2 = self.down1(x1)
         x3 = self.down2(x2)
         x4 = self.down3(x3)
-        bottleneck = self.bottleneck(self.pool(x4))
-        x = self.up1(bottleneck, x4)
-        x = self.up2(x, x3)
-        x = self.up3(x, x2)
-        x = self.up4(x, x1)
+        x5 = self.down4(x4)
+        x6 = self.down5(x5)
+        bottleneck = self.bottleneck(self.pool(x6))
+        x = self.up1(bottleneck, x6)
+        x = self.up2(x, x5)
+        x = self.up3(x, x4)
+        x = self.up4(x, x3)
+        x = self.up5(x, x2)
+        x = self.up6(x, x1)
         return self.head(x)

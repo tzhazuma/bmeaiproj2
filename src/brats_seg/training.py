@@ -5,6 +5,7 @@ import logging
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Callable
 from typing import TypedDict
 
 import numpy as np
@@ -13,7 +14,7 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from .losses import dice_bce_loss
+from .losses import dice_bce_loss, dice_focal_loss
 from .metrics import dice_per_region, hd95_per_region, threshold_predictions
 
 
@@ -27,6 +28,7 @@ class TrainConfig:
     learning_rate: float = 1e-3
     num_workers: int = 0
     threshold: float = 0.5
+    loss: str = "dice_bce"
 
 
 class EvalSummary(TypedDict):
@@ -39,9 +41,24 @@ def create_device() -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def run_epoch(model: torch.nn.Module, loader: DataLoader, optimizer: torch.optim.Optimizer | None, device: str) -> float:
+def get_loss_function(loss_name: str) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
+    if loss_name == "dice_bce":
+        return dice_bce_loss
+    if loss_name == "dice_focal":
+        return dice_focal_loss
+    raise ValueError(f"Unknown loss function: {loss_name}")
+
+
+def run_epoch(
+    model: torch.nn.Module,
+    loader: DataLoader,
+    optimizer: torch.optim.Optimizer | None,
+    device: str,
+    loss_name: str = "dice_bce",
+) -> float:
     train = optimizer is not None
     model.train(train)
+    loss_fn = get_loss_function(loss_name)
     losses: list[float] = []
     iterator = tqdm(loader, desc="train" if train else "val", leave=False)
     for batch in iterator:
@@ -49,7 +66,7 @@ def run_epoch(model: torch.nn.Module, loader: DataLoader, optimizer: torch.optim
         target = batch["target"].float().to(device=device)
         with torch.set_grad_enabled(train):
             logits = model(image)
-            loss = dice_bce_loss(logits, target)
+            loss = loss_fn(logits, target)
         if train:
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -60,8 +77,15 @@ def run_epoch(model: torch.nn.Module, loader: DataLoader, optimizer: torch.optim
 
 
 @torch.no_grad()
-def evaluate_model(model: torch.nn.Module, loader: DataLoader, device: str, threshold: float = 0.5) -> EvalSummary:
+def evaluate_model(
+    model: torch.nn.Module,
+    loader: DataLoader,
+    device: str,
+    threshold: float = 0.5,
+    loss_name: str = "dice_bce",
+) -> EvalSummary:
     model.eval()
+    loss_fn = get_loss_function(loss_name)
     losses: list[float] = []
     dice_scores: list[dict[str, float]] = []
     hd95_scores: list[dict[str, float]] = []
@@ -69,7 +93,7 @@ def evaluate_model(model: torch.nn.Module, loader: DataLoader, device: str, thre
         image = batch["image"].float().to(device=device)
         target = batch["target"].float().to(device=device)
         logits = model(image)
-        loss = dice_bce_loss(logits, target)
+        loss = loss_fn(logits, target)
         losses.append(float(loss.item()))
         preds = threshold_predictions(logits, threshold=threshold)
         truth = target.detach().cpu().numpy().astype(np.uint8)
@@ -108,15 +132,16 @@ def fit(
     best_val = float("inf")
     best_metrics: EvalSummary = {"loss": 0.0, "dice": {}, "hd95": {}}
     logger.info(
-        "Starting training: device=%s, epochs=%d, batch_size=%d, lr=%.3g",
+        "Starting training: device=%s, epochs=%d, batch_size=%d, lr=%.3g, loss=%s",
         device,
         config.epochs,
         config.batch_size,
         config.learning_rate,
+        config.loss,
     )
     for epoch in range(1, config.epochs + 1):
-        train_loss = run_epoch(model, train_loader, optimizer, device)
-        val_summary = evaluate_model(model, val_loader, device, threshold=config.threshold)
+        train_loss = run_epoch(model, train_loader, optimizer, device, loss_name=config.loss)
+        val_summary = evaluate_model(model, val_loader, device, threshold=config.threshold, loss_name=config.loss)
         val_loss = val_summary["loss"]
         history["train_loss"].append(train_loss)
         history["val_loss"].append(val_loss)
