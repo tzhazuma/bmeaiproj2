@@ -17,6 +17,7 @@ python scripts/prepare_cache.py --cache-dir artifacts/preprocessed_cache --slice
 python scripts/train_model.py --model unet --epochs 45 --output-dir artifacts/baseline --batch-size 128
 python scripts/train_model.py --model attention_unet --epochs 10 --output-dir artifacts/attention --batch-size 32 --loss `dice_bce|dice_focal`
 python scripts/train_model.py --model modality_attention_unet --epochs 10 --output-dir artifacts/modality_attention_unet  --batch-size 32
+python scripts/train_all_models.py --model deep_attention_unet --epochs 10 --batch-size 32 --splits artifacts/preprocessed_cache/splits.json --cache-dir artifacts/preprocessed_cache --output-dir artifacts/deep_attention_unet
 python scripts/visualize_predictions.py --model unet --checkpoint artifacts/baseline/best_model.pt --splits artifacts/preprocessed_cache/splits.json --output-dir artifacts/prediction_examples
 python scripts/evaluate_model.py --model attention_unet --checkpoint artifacts/attention/best_model.pt --output-dir artifacts/eval_attention
 ```
@@ -35,3 +36,15 @@ y = concat(y_WT, y_TC, y_ET)
 ```
 
 This lets different tumor regions emphasize different modalities before the image enters Attention U-Net. The learned weights are saved to `learned_modality_attention.json` after training.
+
+## Deep Attention U-Net
+
+`DeepSupAttentionUNet2D` is trained through `scripts/train_all_models.py`, because this script supports models with auxiliary deep-supervision outputs. The model returns the final prediction plus three auxiliary decoder predictions during training, and `train_all_models.py` combines their losses automatically.
+
+Train it with the cached split:
+
+```bash
+python scripts/train_all_models.py --model deep_attention_unet --epochs 10 --batch-size 32 --splits artifacts/preprocessed_cache/splits.json --cache-dir artifacts/preprocessed_cache --output-dir artifacts/deep_attention_unet
+```
+
+The script writes `best_model.pt`, `best_metrics.json`, `history.json`, `history.csv`, and `loss_curve.png` under the chosen output directory.

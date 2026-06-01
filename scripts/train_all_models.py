@@ -38,7 +38,7 @@ from brats_seg.fusion import (
     ModalitySpecificEncoder,
     SliceContextFusion,
 )
-from brats_seg.losses import dice_bce_loss
+from brats_seg.losses import dice_bce_loss, dice_focal_loss
 from brats_seg.metrics import dice_per_region, hd95_per_region, threshold_predictions
 from brats_seg.models import (
     UNet2D,
@@ -54,6 +54,14 @@ from brats_seg.visualization import save_loss_curve
 MODEL_DEEP_SUP = {"resenc_unet", "deep_attention_unet"}
 MODEL_VAE = {"segresnet"}
 MODEL_CHECKPOINT = {"swin_unetr", "mednext", "resenc_unet"}
+
+
+def get_loss_function(loss_name: str):
+    if loss_name == "dice_bce":
+        return dice_bce_loss
+    if loss_name == "dice_focal":
+        return dice_focal_loss
+    raise ValueError(f"Unknown loss function: {loss_name}")
 
 
 def create_backbone(model_name: str, in_channels: int, out_channels: int, use_checkpoint: bool) -> nn.Module:
@@ -108,12 +116,18 @@ def fusion_output_channels(fusion_type: str, multi_slice: int, num_modalities: i
     raise ValueError(f"Unknown fusion type: {fusion_type}")
 
 
-def compute_deep_sup_loss(main: torch.Tensor, aux: tuple[torch.Tensor, ...], target: torch.Tensor) -> torch.Tensor:
+def compute_deep_sup_loss(
+    main: torch.Tensor,
+    aux: tuple[torch.Tensor, ...],
+    target: torch.Tensor,
+    loss_name: str,
+) -> torch.Tensor:
     """Weighted deep-supervision loss for 3 auxiliary heads."""
-    loss = dice_bce_loss(main, target)
-    loss += 0.5 * dice_bce_loss(aux[0], target)
-    loss += 0.25 * dice_bce_loss(aux[1], target)
-    loss += 0.125 * dice_bce_loss(aux[2], target)
+    loss_fn = get_loss_function(loss_name)
+    loss = loss_fn(main, target)
+    loss += 0.5 * loss_fn(aux[0], target)
+    loss += 0.25 * loss_fn(aux[1], target)
+    loss += 0.125 * loss_fn(aux[2], target)
     return loss
 
 
@@ -126,11 +140,13 @@ def compute_vae_loss(
     log_var: torch.Tensor,
     target: torch.Tensor,
     raw_input: torch.Tensor,
+    loss_name: str,
 ) -> torch.Tensor:
-    """SegResNet2D loss: dice_bce + deep-sup + KL + VAE reconstruction."""
-    loss = dice_bce_loss(main, target)
-    loss += 0.5 * dice_bce_loss(aux1, target)
-    loss += 0.3 * dice_bce_loss(aux2, target)
+    """SegResNet2D loss: segmentation loss + deep-sup + KL + VAE reconstruction."""
+    loss_fn = get_loss_function(loss_name)
+    loss = loss_fn(main, target)
+    loss += 0.5 * loss_fn(aux1, target)
+    loss += 0.3 * loss_fn(aux2, target)
 
     kl = -0.5 * (1 + log_var - mu.pow(2) - log_var.exp()).mean()
     recon = F.mse_loss(vae_recon, raw_input[:, :4, :, :])
@@ -146,6 +162,7 @@ def train_one_epoch(
     scaler: torch.amp.GradScaler | None,
     device: str,
     model_name: str,
+    loss_name: str,
 ) -> float:
     """Run a single training epoch. Returns average loss."""
     backbone.train()
@@ -171,13 +188,13 @@ def train_one_epoch(
         with _autocast_ctx(device, use_amp):
             if is_vae:
                 main, aux1, aux2, vae_recon, mu, log_var = backbone(image)
-                loss = compute_vae_loss(main, aux1, aux2, vae_recon, mu, log_var, target, image_raw)
+                loss = compute_vae_loss(main, aux1, aux2, vae_recon, mu, log_var, target, image_raw, loss_name)
             elif is_deep_sup:
                 main, aux1, aux2, aux3 = backbone(image, return_aux=True)
-                loss = compute_deep_sup_loss(main, (aux1, aux2, aux3), target)
+                loss = compute_deep_sup_loss(main, (aux1, aux2, aux3), target, loss_name)
             else:
                 output = backbone(image)
-                loss = dice_bce_loss(output, target)
+                loss = get_loss_function(loss_name)(output, target)
 
         if use_amp:
             scaler.scale(loss).backward()
@@ -202,6 +219,7 @@ def evaluate(
     device: str,
     threshold: float = 0.5,
     amp_enabled: bool = False,
+    loss_name: str = "dice_bce",
 ) -> dict:
     """Run validation: compute loss, dice, hd95."""
     backbone.eval()
@@ -221,7 +239,7 @@ def evaluate(
 
         with _autocast_ctx(device, amp_enabled):
             logits = backbone(image)
-            loss = dice_bce_loss(logits, target)
+            loss = get_loss_function(loss_name)(logits, target)
 
         losses.append(float(loss.item()))
         preds = threshold_predictions(logits, threshold=threshold)
@@ -269,6 +287,12 @@ def main() -> None:
         help="Modality fusion module",
     )
     parser.add_argument("--amp", action="store_true", help="Enable AMP mixed-precision training")
+    parser.add_argument(
+        "--loss",
+        default="dice_bce",
+        choices=["dice_bce", "dice_focal"],
+        help="Segmentation loss used for training and validation loss tracking",
+    )
     parser.add_argument("--no-checkpoint", action="store_true", help="Disable gradient checkpointing")
     parser.add_argument(
         "--lr-schedule",
@@ -384,6 +408,7 @@ def main() -> None:
             scaler=scaler,
             device=device,
             model_name=args.model,
+            loss_name=args.loss,
         )
 
         val_summary = evaluate(
@@ -392,6 +417,7 @@ def main() -> None:
             loader=val_loader,
             device=device,
             amp_enabled=use_amp,
+            loss_name=args.loss,
         )
         val_loss = val_summary["loss"]
 
@@ -440,6 +466,7 @@ def main() -> None:
                 "epoch": epoch,
                 "val_loss": val_loss,
                 "model": args.model,
+                "loss": args.loss,
                 "fusion_type": args.fusion,
                 "multi_slice": multi_slice,
             }

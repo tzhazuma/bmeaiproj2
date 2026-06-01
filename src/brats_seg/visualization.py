@@ -74,23 +74,24 @@ def save_prediction_figure(
 ) -> Path:
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig, axes = plt.subplots(3, 3, figsize=(11, 11))
-    axes[0, 0].imshow(image[0, slice_index], cmap="gray")
-    axes[0, 0].set_title("T1C")
-    axes[0, 0].axis("off")
-    for row, (name, truth, pred) in enumerate(zip(REGION_NAMES, target[:, slice_index], prediction[:, slice_index], strict=True)):
-        axes[row, 1].imshow(truth, cmap="viridis")
-        axes[row, 1].set_title(f"GT {name}")
-        axes[row, 1].axis("off")
-        axes[row, 2].imshow(pred, cmap="magma")
-        axes[row, 2].set_title(f"Pred {name}")
-        axes[row, 2].axis("off")
-    axes[1, 0].imshow(image[2, slice_index], cmap="gray")
-    axes[1, 0].set_title("T2F")
-    axes[1, 0].axis("off")
-    axes[2, 0].imshow(image[3, slice_index], cmap="gray")
-    axes[2, 0].set_title("T2W")
-    axes[2, 0].axis("off")
+    fig, axes = plt.subplots(3, 4, figsize=(14, 10))
+    for col, modality in enumerate(MODALITIES):
+        axes[0, col].imshow(image[col, slice_index], cmap="gray")
+        axes[0, col].set_title(modality.upper())
+        axes[0, col].axis("off")
+
+    for col, (name, truth) in enumerate(zip(REGION_NAMES, target[:, slice_index], strict=True)):
+        axes[1, col].imshow(truth, cmap="viridis")
+        axes[1, col].set_title(f"GT {name}")
+        axes[1, col].axis("off")
+    axes[1, 3].axis("off")
+
+    for col, (name, pred) in enumerate(zip(REGION_NAMES, prediction[:, slice_index], strict=True)):
+        axes[2, col].imshow(pred, cmap="magma")
+        axes[2, col].set_title(f"Pred {name}")
+        axes[2, col].axis("off")
+    axes[2, 3].axis("off")
+
     fig.tight_layout()
     fig.savefig(str(output_path), dpi=180, bbox_inches="tight")
     plt.close(fig)
