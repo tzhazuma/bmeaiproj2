@@ -52,3 +52,70 @@ def predict_case_regions(
         dice=dice_per_region(prediction, aligned_target),
         hd95=hd95_per_region(prediction, aligned_target),
     )
+
+
+@torch.no_grad()
+def predict_with_tta(
+    model: torch.nn.Module,
+    image_slice: np.ndarray,
+    device: str,
+    num_augments: int = 4,
+) -> torch.Tensor:
+    model.eval()
+    tensor = torch.from_numpy(image_slice).float().unsqueeze(0).to(device=device)
+    predictions: list[torch.Tensor] = []
+
+    for aug_idx in range(num_augments):
+        aug_tensor = tensor
+        if aug_idx == 0:
+            pass
+        elif aug_idx == 1:
+            aug_tensor = torch.flip(tensor, dims=[-2])
+        elif aug_idx == 2:
+            aug_tensor = torch.flip(tensor, dims=[-1])
+        elif aug_idx == 3:
+            aug_tensor = torch.flip(tensor, dims=[-2, -1])
+        logits = model(aug_tensor)
+        if aug_idx == 1:
+            logits = torch.flip(logits, dims=[-2])
+        elif aug_idx == 2:
+            logits = torch.flip(logits, dims=[-1])
+        elif aug_idx == 3:
+            logits = torch.flip(logits, dims=[-2, -1])
+        predictions.append(logits)
+
+    return torch.stack(predictions).mean(dim=0)
+
+
+@torch.no_grad()
+def predict_case_regions_tta(
+    model: torch.nn.Module,
+    image_volume: np.ndarray,
+    target_volume: np.ndarray,
+    device: str,
+    case_id: str = "",
+    target_shape: tuple[int, int] = (160, 160),
+    threshold: float = 0.5,
+    num_augments: int = 4,
+) -> CasePredictionResult:
+    model.eval()
+    num_slices = image_volume.shape[1]
+    aligned_image = np.zeros((image_volume.shape[0], num_slices, *target_shape), dtype=np.float32)
+    aligned_target = np.zeros((target_volume.shape[0], num_slices, *target_shape), dtype=np.uint8)
+    prediction = np.zeros((target_volume.shape[0], num_slices, *target_shape), dtype=np.uint8)
+    for slice_index in range(num_slices):
+        image = pad_or_crop_2d(image_volume[:, slice_index], target_shape)
+        target = pad_or_crop_2d(target_volume[:, slice_index], target_shape)
+        aligned_image[:, slice_index] = image
+        aligned_target[:, slice_index] = target.astype(np.uint8)
+        avg_logits = predict_with_tta(model, image, device, num_augments=num_augments)
+        pred = threshold_predictions(avg_logits, threshold=threshold)[0]
+        prediction[:, slice_index] = pred
+    return CasePredictionResult(
+        case_id=case_id,
+        image=aligned_image,
+        prediction=prediction,
+        target=aligned_target,
+        dice=dice_per_region(prediction, aligned_target),
+        hd95=hd95_per_region(prediction, aligned_target),
+    )
