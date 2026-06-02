@@ -36,7 +36,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from brats_seg.constants import DEFAULT_DATA_ROOT
-from brats_seg.data import BraTSSliceDataset, discover_cases, limit_cases, stable_split_cases
+from brats_seg.data import BraTSSliceDataset, CachedBraTSSliceDataset, discover_cases, limit_cases, stable_split_cases
 from brats_seg.device import device_name, get_device
 from brats_seg.losses import dice_bce_loss
 from brats_seg.metrics import dice_per_region, hd95_per_region, threshold_predictions
@@ -59,6 +59,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--splits", default="", help="Path to pre-saved splits manifest")
     parser.add_argument("--include-empty", action="store_true")
     parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--cache-dir", default="", help="Use preprocessed cache dir for fast loading (skips on-the-fly NIfTI preprocessing)")
     parser.add_argument("--amp", action="store_true", default=True, help="Use bf16 mixed precision via torch.amp (default: on)")
     parser.add_argument("--no-amp", action="store_false", dest="amp", help="Disable mixed precision")
     parser.add_argument("--grad-accum-steps", type=int, default=1, help="Gradient accumulation steps (effective batch = batch_size * grad_accum_steps)")
@@ -179,8 +180,14 @@ def main() -> None:
     cases = limit_cases(cases, args.max_cases or None)
     splits = stable_split_cases(cases)
 
-    train_dataset = BraTSSliceDataset(splits["train"], include_empty=args.include_empty, augment=True)
-    val_dataset = BraTSSliceDataset(splits["val"], include_empty=False, augment=False)
+    use_cache = args.cache_dir and Path(args.cache_dir).exists()
+    if use_cache:
+        print(f"Using preprocessed cache: {args.cache_dir}")
+        train_dataset = CachedBraTSSliceDataset(splits["train"], cache_dir=args.cache_dir, include_empty=args.include_empty, augment=True)
+        val_dataset = CachedBraTSSliceDataset(splits["val"], cache_dir=args.cache_dir, include_empty=False, augment=False)
+    else:
+        train_dataset = BraTSSliceDataset(splits["train"], include_empty=args.include_empty, augment=True)
+        val_dataset = BraTSSliceDataset(splits["val"], include_empty=False, augment=False)
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 

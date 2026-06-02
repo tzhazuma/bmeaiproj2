@@ -190,17 +190,16 @@ def train_one_epoch(
         image: torch.Tensor = batch["image"]  # type: ignore[assignment]
         target: torch.Tensor = batch["target"]  # type: ignore[assignment]
 
-        with accelerator.autocast():
-            outputs = model(pixel_values=image)
-            logits: torch.Tensor = outputs.logits
-            # SegFormer outputs at 1/4 resolution → upsample to target size
-            logits = F.interpolate(
-                logits,
-                size=target.shape[-2:],
-                mode="bilinear",
-                align_corners=False,
-            )
-            loss = dice_bce_loss(logits, target) / grad_accum
+        outputs = model(pixel_values=image)
+        logits: torch.Tensor = outputs.logits
+        # SegFormer outputs at 1/4 resolution → upsample to target size
+        logits = F.interpolate(
+            logits,
+            size=target.shape[-2:],
+            mode="bilinear",
+            align_corners=False,
+        )
+        loss = dice_bce_loss(logits, target) / grad_accum
 
         accelerator.backward(loss)
         if (step + 1) % grad_accum == 0:
@@ -226,64 +225,54 @@ def evaluate(
     accelerator: Accelerator,
     threshold: float = 0.5,
 ) -> dict:
-    """Evaluate on the main process only.
+    """Evaluate only on the main process using the unwrapped model.
 
-    For multi-GPU we gather logits & targets to rank 0, then compute Dice /
-    HD95 serially on a single CPU.  With a 30-case BraTS subset this is
-    negligible overhead and avoids dict-gathering complexity.
+    With a small validation set (~30 BraTS cases → <200 slices) the overhead
+    of gathering tensors across devices is not justified.  We run evaluation
+    serially on rank 0 instead, which also avoids padding mismatches from
+    uneven last batches in multi-GPU settings.
     """
-    model.eval()
-    gathered_logits: list[torch.Tensor] = []
-    gathered_targets: list[torch.Tensor] = []
+    if not accelerator.is_main_process:
+        return {"loss": 0.0, "dice": {}, "hd95": {}}
 
-    for batch in tqdm(
-        loader,
-        desc="eval",
-        leave=False,
-        disable=not accelerator.is_local_main_process,
-    ):
-        image: torch.Tensor = batch["image"]  # type: ignore[assignment]
-        target: torch.Tensor = batch["target"]  # type: ignore[assignment]
+    unwrapped: torch.nn.Module = accelerator.unwrap_model(model)
+    unwrapped.eval()
 
-        with accelerator.autocast():
-            outputs = model(pixel_values=image)
-            logits: torch.Tensor = outputs.logits
-            logits = F.interpolate(
+    losses: list[float] = []
+    dice_list: list[dict[str, float]] = []
+    hd95_list: list[dict[str, float]] = []
+
+    for batch in tqdm(loader, desc="eval", leave=False):
+        image = batch["image"]  # type: ignore[assignment]
+        target = batch["target"]  # type: ignore[assignment]
+
+        outputs = unwrapped(pixel_values=image)
+        logits = outputs.logits
+        logits = F.interpolate(
                 logits,
                 size=target.shape[-2:],
                 mode="bilinear",
                 align_corners=False,
             )
 
-        # Gather across devices so rank 0 sees the full validation set.
-        gl = accelerator.gather(logits)
-        gt = accelerator.gather(target)
-        if accelerator.is_main_process:
-            gathered_logits.append(gl.cpu())
-            gathered_targets.append(gt.cpu())
+        loss = dice_bce_loss(logits, target)
+        losses.append(float(loss.item()))
 
-    if not accelerator.is_main_process:
-        # Non-main ranks return a stub; main processes the final metrics.
-        return {"loss": 0.0, "dice": {}, "hd95": {}}
-
-    all_logits = torch.cat(gathered_logits, dim=0)
-    all_targets = torch.cat(gathered_targets, dim=0)
-
-    val_loss = float(dice_bce_loss(all_logits, all_targets).item())
-    preds = threshold_predictions(all_logits, threshold=threshold)
-    truth = all_targets.numpy().astype(np.uint8)
-
-    dice_list: list[dict[str, float]] = []
-    hd95_list: list[dict[str, float]] = []
-    for pred_np, truth_np in zip(preds, truth, strict=True):
-        dice_list.append(dice_per_region(pred_np, truth_np))
-        hd95_list.append(hd95_per_region(pred_np, truth_np))
+        preds = threshold_predictions(logits, threshold=threshold)
+        truth = target.cpu().numpy().astype(np.uint8)
+        for pred_np, truth_np in zip(preds, truth, strict=True):
+            dice_list.append(dice_per_region(pred_np, truth_np))
+            hd95_list.append(hd95_per_region(pred_np, truth_np))
 
     keys = list(dice_list[0].keys()) if dice_list else []
     avg_dice = {k: float(np.mean([d[k] for d in dice_list])) for k in keys}
     avg_hd95 = {k: float(np.mean([d[k] for d in hd95_list])) for k in keys}
 
-    return {"loss": val_loss, "dice": avg_dice, "hd95": avg_hd95}
+    return {
+        "loss": float(np.mean(losses)) if losses else 0.0,
+        "dice": avg_dice,
+        "hd95": avg_hd95,
+    }
 
 
 # ── main ─────────────────────────────────────────────────────────────────
@@ -341,13 +330,6 @@ def main() -> None:
         num_workers=args.num_workers,
         pin_memory=(dev != "cpu"),
     )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=args.num_workers,
-        pin_memory=(dev != "cpu"),
-    )
 
     if accelerator.is_main_process:
         print(f"Train cases: {len(splits['train'])}, Val cases: {len(splits['val'])}")
@@ -402,8 +384,19 @@ def main() -> None:
     # ── Prepare with Accelerator ─────────────────────────────────────────
     # NOTE: we do NOT pass the scheduler to prepare() because
     # CosineAnnealingWarmRestarts is stepped per epoch, not per batch.
-    model, optimizer, train_loader, val_loader = accelerator.prepare(
-        model, optimizer, train_loader, val_loader,
+    #
+    # Keep an *unprepared* validation loader so evaluate() can run
+    # exclusively on rank 0 with the full dataset (avoids DistributedSampler
+    # subsetting and gather-padding issues for small validation sets).
+    val_loader_main = DataLoader(
+        val_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=(dev != "cpu"),
+    )
+    model, optimizer, train_loader = accelerator.prepare(
+        model, optimizer, train_loader,
     )
 
     # ── Training loop ────────────────────────────────────────────────────
@@ -422,7 +415,8 @@ def main() -> None:
         )
         scheduler.step(epoch - 1)
 
-        val_summary = evaluate(model, val_loader, accelerator)
+        val_summary = evaluate(model, val_loader_main, accelerator)
+        accelerator.wait_for_everyone()
         val_loss = val_summary["loss"]
         dice_row = val_summary["dice"]
         hd95_row = val_summary["hd95"]
