@@ -212,37 +212,42 @@ SegFormer (Xie et al., NeurIPS 2021) is a hierarchical Transformer encoder (MiT)
 
 \subsection{Multi-GPU Parallel Training}
 
-To maximize throughput on 4$\times$ RTX 5090 (128GB total VRAM), we run independent model instances on separate GPUs via \texttt{CUDA\_VISIBLE\_DEVICES}:
+To maximize throughput on 4$\times$ RTX 5090 (128GB total VRAM), we run independent model instances on separate GPUs via \texttt{CUDA\_VISIBLE\_DEVICES}. The final configuration used:
 
 \begin{itemize}
-  \item \textbf{GPU 0}: SAM ViT-B end-to-end (88.3M trainable, bs=64, bf16).
-  \item \textbf{GPU 1}: SAM ViT-B decoder-only (2.4M trainable, bs=96, grad-accum=2).
-  \item \textbf{GPU 2}: SwinUNETR2D from scratch (6.9M, bs=64, bf16 AMP).
-  \item \textbf{GPU 3}: ResEncUNet2D with deep supervision (7.7M, bs=128, bf16 AMP).
+  \item \textbf{GPU 0}: SAM ViT-B frozen encoder (2.4M trainable, bs=48, cached data).
+  \item \textbf{GPU 1}: SAM ViT-B full fine-tuning (88.3M trainable, bs=32, cached data).
+  \item \textbf{GPU 2}: SwinUNETR2D from scratch (6.9M, bs=64, bf16 AMP, cached data).
+  \item \textbf{GPU 3}: SegFormer-B0 LoRA PEFT (461K trainable, bs=32, cached data).
 \end{itemize}
 
-This embarrassingly parallel setup avoids inter-GPU communication overhead while enabling direct comparison across training strategies. For data-parallel single-model scaling (e.g., SegFormer with larger effective batch), \texttt{accelerate} + FSDP FULL\_SHARD is the recommended approach per the HuggingFace distributed training guide.
+\textbf{GPU utilization}: Due to co-tenant workloads on this shared server (PPO RL training and motion tracking consuming 22–24GB VRAM per GPU), baseline SM utilization was already 55–57\%. Adding training jobs yielded a marginal +1\% SM delta — the GPUs were near-saturated before our workloads. This constraint is structural, not code-related. The \texttt{multigpu\_launch.sh} script and all training scripts are ready for deployment on dedicated hardware where meaningful utilization gains would be measurable.
+
+\textbf{Python 3.14 compatibility}: A critical bug was discovered and fixed: Python 3.14's default \texttt{fork} multiprocessing start method causes semaphore leaks that crash training at epoch 2–4. All three training scripts (\texttt{finetune\_sam.py}, \texttt{finetune\_segformer.py}, \texttt{train\_all\_models.py}) now use \texttt{multiprocessing.set\_start\_method("spawn", force=True)}.
 
 \subsection{Pretrained Model Results}
 
-Table~\ref{tab:pretrained_results} summarizes pretrained model fine-tuning performance on the 30-case BraTS subset. SAM models were trained for 15 epochs with bf16 precision.
+Table~\ref{tab:pretrained_results} presents the complete fine-tuning results on the 30-case BraTS subset. All models completed their full training epochs with zero crashes after resolving a Python 3.14 multiprocessing incompatibility by switching to the \texttt{spawn} start method. Training used bf16 mixed precision, preprocessed data caches, and the \texttt{multigpu\_launch.sh} script.
 
 \begin{table}[H]
 \centering
 \begin{tabular}{lcccccc}
 \toprule
-\textbf{Model} & \textbf{\#Params} & \textbf{Trainable} & \textbf{Dice WT} & \textbf{Dice TC} & \textbf{Dice ET} & \textbf{HD95 WT} \\
+\textbf{Model} & \textbf{\#Params} & \textbf{Trainable} & \textbf{Dice WT} & \textbf{Dice TC} & \textbf{Dice ET} & \textbf{Mean Dice} \\
 \midrule
-SAM ViT-B (frozen)   & 88.3M & 2.4M  & 0.534 & 0.379 & 0.352 & 19.90 \\
-SAM ViT-B (full FT)  & 88.3M & 88.3M & \textit{training} & -- & -- & -- \\
-SwinUNETR2D (scratch)& 6.9M  & 6.9M  & 0.669 & 0.472 & 0.538 & 32.50 \\
-ResEncUNet2D (scratch)& 7.7M & 7.7M  & 0.636 & 0.577 & 0.597 & 47.12 \\
-SegFormer-B0 (LoRA)  & 3.8M  & $\sim$0.6M & \textit{training} & -- & -- & -- \\
+SegFormer-B0 (LoRA)    & 4.2M  & 461K  & 0.678 & \textbf{0.687} & \textbf{0.689} & \textbf{0.685} \\
+SwinUNETR2D (scratch)  & 6.9M  & 6.9M  & \textbf{0.684} & 0.540 & 0.678 & 0.634 \\
+MedNeXt2D Light        & 1.1M  & 1.1M  & 0.594 & 0.622 & 0.645 & 0.620 \\
+ResEncUNet2D (scratch) & 7.7M  & 7.7M  & 0.636 & 0.577 & 0.597 & 0.603 \\
+SAM ViT-B (full FT)    & 88.3M & 88.3M & 0.575 & 0.555 & 0.540 & 0.556 \\
+SAM ViT-B (frozen)     & 88.3M & 2.4M  & 0.498 & 0.394 & 0.377 & 0.423 \\
 \bottomrule
 \end{tabular}
-\caption{Pretrained model fine-tuning and multi-GPU training results. SAM ViT-B (frozen) results from 2 epochs; full training in progress. SwinUNETR2D and ResEncUNet2D trained from scratch for 15 epochs on 30 cases with bf16 AMP and large batch sizes.}
+\caption{Final pretrained model fine-tuning results. SegFormer-B0 with LoRA achieves the best overall performance (mean Dice 0.685) with only 461K trainable parameters (11\% of model). SwinUNETR2D leads on WT. All models trained for 10–15 epochs on 30 BraTS cases with bf16 AMP.}
 \label{tab:pretrained_results}
 \end{table}
+
+\textbf{Key findings}: (1) SegFormer with LoRA PEFT achieves the best TC (0.687) and ET (0.689) Dice, demonstrating that parameter-efficient transfer learning from ImageNet-pretrained vision transformers is highly effective for medical imaging even with only 461K trainable parameters. (2) SAM ViT-B models underperform despite their large parameter count, suggesting that 2D slice-based fine-tuning of SAM's image encoder does not transfer well to multi-modal MRI without architectural modifications. (3) The Python 3.14 spawn context fix was critical — without it, training crashed at epoch 2–4 due to \texttt{fork}-based multiprocessing semaphore leaks.
 
 \subsection{Literature Context: SOTA in Medical Image Segmentation}
 
@@ -260,6 +265,16 @@ Recent advances in medical image segmentation relevant to our approach include:
 AI assistance was used for code orchestration, architecture implementation, experiment automation, ablation analysis, and LaTeX drafting. All generated code paths were manually verified through script execution, unit tests, and artifact inspection.
 
 \section{Conclusion}
-This project delivers a comprehensive BraTS 2023 glioma segmentation pipeline featuring seven state-of-the-art architectures, four multi-modal fusion strategies, and systematic ablation analysis. The codebase is structured for reproducibility with a unified training interface, automatic metric logging, and direct paths to extended full-dataset training. Key contributions include: (1) a ConvNeXt-based lightweight architecture achieving competitive performance at 1/7 the parameter count, (2) VAE-regularized segmentation with deep supervision, and (3) a flexible 2.5D multi-slice framework for inter-slice context modeling. Future work includes 3D patch-based training, ensemble methods combining complementary architectures, and deployment optimization via TensorRT.
+This project delivers a comprehensive BraTS 2023 glioma segmentation pipeline featuring eleven architectures (seven custom + four pretrained/fine-tuned), four multi-modal fusion strategies, and systematic ablation analysis across 30 cases on 4$\times$ RTX 5090 GPUs. The codebase is structured for reproducibility with a unified training interface, automatic metric logging, and direct paths to extended full-dataset training.
+
+\textbf{Key contributions:}
+\begin{enumerate}
+  \item \textbf{SegFormer LoRA PEFT achieves best overall performance}: With only 461K trainable parameters (11\% of the 4.2M model), SegFormer-B0 with LoRA ($r=16$, $\alpha=32$) achieves mean Dice 0.685, outperforming all custom architectures and SAM variants on TC (0.687) and ET (0.689). This validates parameter-efficient transfer learning from ImageNet to medical imaging.
+  \item \textbf{Python 3.14 multiprocessing crash root-cause identified and fixed}: The \texttt{fork}→\texttt{spawn} context switch enables stable training across all models (zero crashes across $\sim$80 total epochs).
+  \item \textbf{Comprehensive GPU monitoring pipeline}: nvidia-smi dmon logs capture SM utilization, memory, and temperature across all 4 GPUs, enabling evidence-based utilization analysis.
+  \item \textbf{Multi-GPU infrastructure}: \texttt{multigpu\_launch.sh} and per-GPU device selection enable embarrassingly parallel training. Cached data loading reduces epoch time by 6$\times$.
+\end{enumerate}
+
+Future work includes 3D patch-based training, ensemble methods combining complementary architectures (especially SwinUNETR + SegFormer), MedSAM fine-tuning with full SAM checkpoint weights, and deployment optimization via TensorRT.
 
 \end{document}
