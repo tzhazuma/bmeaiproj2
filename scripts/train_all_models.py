@@ -3,6 +3,11 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import multiprocessing
+
+# Fix Python 3.14 multiprocessing semaphore leak
+multiprocessing.set_start_method("spawn", force=True)
+
 from pathlib import Path
 
 import numpy as np
