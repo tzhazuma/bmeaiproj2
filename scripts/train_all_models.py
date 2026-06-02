@@ -12,11 +12,13 @@ import torch.nn.functional as F
 def _create_scaler(device: str, enabled: bool) -> torch.amp.GradScaler | None:
     if not enabled:
         return None
-    return torch.amp.GradScaler("cuda" if device == "cuda" else "cpu")
+    amp_device = device if device in ("cuda", "xpu") else "cpu"
+    return torch.amp.GradScaler(amp_device)
 
 
 def _autocast_ctx(device: str, enabled: bool):
-    return torch.amp.autocast("cuda" if device == "cuda" else "cpu", enabled=enabled)
+    amp_device = device if device in ("cuda", "xpu") else "cpu"
+    return torch.amp.autocast(amp_device, enabled=enabled)
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ReduceLROnPlateau
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -49,6 +51,7 @@ from brats_seg.models import (
     SegResNet2D,
     SwinUNETR2D,
 )
+from brats_seg.device import get_device
 from brats_seg.visualization import save_loss_curve
 
 MODEL_DEEP_SUP = {"resenc_unet", "deep_attention_unet"}
@@ -351,7 +354,7 @@ def main() -> None:
     print(f"Train cases: {len(splits['train'])}, Val cases: {len(splits['val'])}")
     print(f"Train slices: {len(train_dataset)}, Val slices: {len(val_dataset)}")
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = get_device()
     print(f"Device: {device}")
 
     if args.fusion and multi_slice > 0 and args.fusion != "slice":

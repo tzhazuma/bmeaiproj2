@@ -17,6 +17,7 @@ from brats_seg.data import (
     save_split_manifest,
     stable_split_cases,
 )
+from brats_seg.device import get_device
 from brats_seg.models import AttentionUNet2D, RegionModalityAttentionUNet2D, UNet2D
 from brats_seg.training import TrainConfig, fit
 from brats_seg.visualization import save_loss_curve

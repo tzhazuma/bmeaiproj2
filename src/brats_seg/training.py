@@ -38,7 +38,9 @@ class EvalSummary(TypedDict):
 
 
 def create_device() -> str:
-    return "cuda" if torch.cuda.is_available() else "cpu"
+    from .device import get_device
+
+    return get_device()
 
 
 def get_loss_function(loss_name: str) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:

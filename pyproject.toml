@@ -18,6 +18,9 @@ dependencies = [
   "PyYAML",
 ]
 
+[project.optional-dependencies]
+sam = ["segment-anything", "torchvision"]
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 
