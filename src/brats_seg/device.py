@@ -1,10 +1,15 @@
-"""Device auto-detection for PyTorch across ROCm, CUDA, MPS, Intel XPU, and CPU.
+"""Device auto-detection for PyTorch across CUDA, ROCm, MPS, Intel XPU, and CPU.
+
+PyTorch ROCm builds expose AMD GPUs through the CUDA API layer, so
+``torch.device()`` accepts ``"cuda"`` on both NVIDIA and AMD systems.
+The ``_rocm_available()`` helper distinguishes the two at the human-readable
+``device_name()`` level.
 
 Usage::
 
     from brats_seg.device import get_device, device_name, device_type
 
-    dev = get_device()          # e.g. "rocm", "cuda", "mps", "xpu", "cpu"
+    dev = get_device()          # "cuda" | "mps" | "xpu" | "cpu"
     typ = device_type()         # "gpu" | "cpu"
     name = device_name()        # human-readable string
 """
@@ -22,20 +27,20 @@ def _rocm_available() -> bool:
 def get_device() -> str:
     """Detect the best available torch device.
 
+    On ROCm (AMD), PyTorch uses ``"cuda"`` as the device string —
+    same as for NVIDIA CUDA — because ROCm provides a CUDA API
+    compatibility layer.
+
     Priority order (first available wins):
-    1. ROCm (AMD GPU via PyTorch ROCm build)
-    2. CUDA (NVIDIA GPU)
-    3. MPS  (Apple Silicon / Metal Performance Shaders)
-    4. XPU  (Intel GPU via ``intel-extension-for-pytorch``)
-    5. CPU  (universal fallback)
+    1. CUDA / ROCm (NVIDIA GPU / AMD GPU via ROCm)
+    2. MPS  (Apple Silicon / Metal Performance Shaders)
+    3. XPU  (Intel GPU via ``intel-extension-for-pytorch``)
+    4. CPU  (universal fallback)
 
     Returns:
         Device string suitable for ``torch.device()``:
-        ``"rocm"``, ``"cuda"``, ``"mps"``, ``"xpu"``, or ``"cpu"``.
+        ``"cuda"``, ``"mps"``, ``"xpu"``, or ``"cpu"``.
     """
-    if _rocm_available():
-        return "rocm"
-
     if torch.cuda.is_available():
         return "cuda"
 
@@ -53,7 +58,7 @@ def get_device() -> str:
 def device_type() -> str:
     """Return ``"gpu"`` if any GPU-like accelerator is active, else ``"cpu"``."""
     dev = get_device()
-    gpu_devices = ("rocm", "cuda", "mps", "xpu")
+    gpu_devices = ("cuda", "mps", "xpu")
     return "gpu" if dev in gpu_devices else "cpu"
 
 
@@ -70,14 +75,11 @@ def device_name() -> str:
     """
     dev = get_device()
 
-    if dev == "rocm":
-        count = torch.cuda.device_count()
-        name = torch.cuda.get_device_name(0) if count > 0 else "AMD GPU (ROCm)"
-        return name
-
     if dev == "cuda":
         count = torch.cuda.device_count()
-        name = torch.cuda.get_device_name(0) if count > 0 else "NVIDIA CUDA GPU"
+        name = torch.cuda.get_device_name(0) if count > 0 else "GPU"
+        if _rocm_available():
+            return f"{name} (ROCm)"
         return name
 
     if dev == "mps":
