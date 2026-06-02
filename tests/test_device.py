@@ -50,17 +50,11 @@ class GetDeviceTest(unittest.TestCase):
 
     @mock.patch("torch.cuda.is_available", return_value=False)
     @mock.patch("torch.backends.mps.is_available", return_value=False)
-    def test_cpu_fallback_no_xpu(self, _mock_mps: mock.Mock, _mock_cuda: mock.Mock) -> None:
-        """When no accelerator is available, get_device() returns 'cpu'.
-
-        Note: If this machine has torch.xpu available, XPU detection will
-        still return whatever torch.xpu.is_available() reports. This test
-        works correctly regardless — CPU is the fallback when ALL backends
-        report unavailable.
-        """
+    @mock.patch("torch.xpu.is_available", return_value=False)
+    def test_cpu_fallback(self, _mock_xpu: mock.Mock, _mock_mps: mock.Mock, _mock_cuda: mock.Mock) -> None:
+        """When no accelerator is available, get_device() returns 'cpu'."""
         d = dev.get_device()
-        # Mocks only cover cuda + mps; actual result depends on XPU availability.
-        self.assertIn(d, ("cpu", "xpu"))
+        self.assertEqual(d, "cpu")
 
     # ── S5: device_name() returns human-readable string ──────────────────────
 

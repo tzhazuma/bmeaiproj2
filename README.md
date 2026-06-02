@@ -24,6 +24,30 @@ python scripts/evaluate_model.py --model attention_unet --checkpoint artifacts/a
 
 `prepare_cache.py` samples raw slices before preprocessing when `--slices-per-case` is set, then writes preprocessed case data and `artifacts/preprocessed_cache/splits.json`; `train_model.py` reuses them and creates `--aug-samples-per-slice` random augmented samples per cached slice on the fly.
 
+## SAM-like pretrained model fine-tuning
+
+This project supports fine-tuning a SAM (Segment Anything Model) style pretrained model for BraTS segmentation via `scripts/finetune_sam.py`.
+
+**Two modes:**
+
+- **`--source vit`** (default) — pure-PyTorch ViT encoder, no external dependencies, random init. Use for testing the pipeline.
+- **`--source sam`** — loads Meta's actual SAM weights. Requires the `segment-anything` package and a pretrained checkpoint.
+
+```bash
+# Standalone mode (random init, no download needed)
+python scripts/finetune_sam.py --source vit --epochs 5
+
+# Full SAM mode (requires checkpoint from Meta)
+pip install brats-seg[sam]
+wget https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth
+python scripts/finetune_sam.py --source sam \
+    --checkpoint sam_vit_b_01ec64.pth --epochs 15
+```
+
+The SAM adapter (`src/brats_seg/models/sam_adapter.py`) automatically adapts SAM's 3-channel RGB image encoder to BraTS's 4-modality input by duplicating the nearest pretrained channel, and replaces SAM's mask decoder with a lightweight conv head outputting 3 regions (WT, TC, ET). The ViT encoder can be frozen (default) or fine-tuned end-to-end.
+
+**Device auto-detection:** All training scripts use `get_device()` to automatically select CUDA (NVIDIA), ROCm (AMD), MPS (Apple Silicon), XPU (Intel), or CPU fallback.
+
 ## Region-specific modality attention
 
 `RegionModalityAttentionUNet2D` adds a modality-attention stage before Attention U-Net and can be trained with `python scripts/train_model.py --model modality_attention_unet`. For each output region `r` in `(WT, TC, ET)`, the model learns a separate softmax distribution over the four MRI modalities `(t1c, t1n, t2f, t2w)`:

@@ -270,6 +270,9 @@ class SAMAdapter(nn.Module):
             )
             with torch.no_grad():
                 new_conv.weight[:, :3] = old_conv.weight
+                # Prevent frozen-random 4th channel: copy nearest channel (channel 2)
+                # so all 4 BraTS modalities get meaningful initial features.
+                new_conv.weight[:, 3:] = old_conv.weight[:, 2:3]
                 if old_conv.bias is not None:
                     new_conv.bias = old_conv.bias
             sam.image_encoder.patch_embed.proj = new_conv

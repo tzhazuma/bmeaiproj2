@@ -53,14 +53,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=15)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
-    parser.add_argument("--freeze-encoder", action="store_true", default=True, help="Freeze ViT encoder")
-    parser.add_argument("--no-freeze-encoder", action="store_false", dest="freeze_encoder")
+    parser.add_argument("--freeze-encoder", action="store_false", help="Unfreeze ViT encoder (default: frozen)")
+    parser.add_argument("--no-freeze-encoder", action="store_true", dest="unfreeze_encoder", help="Alias for unfreezing encoder")
     parser.add_argument("--max-cases", type=int, default=0, help="Limit training cases (0 = all)")
     parser.add_argument("--splits", default="", help="Path to pre-saved splits manifest")
     parser.add_argument("--include-empty", action="store_true")
     parser.add_argument("--num-workers", type=int, default=0)
-    parser.set_defaults(freeze_encoder=True)
-    return parser.parse_args()
+    args = parser.parse_args()
+    args.freeze_encoder = not getattr(args, "unfreeze_encoder", False)
+    return args
 
 
 def train_one_epoch(
