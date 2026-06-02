@@ -1,74 +1,118 @@
 # BraTS 2023 Glioma Segmentation Project
 
-This repository implements the coursework pipeline for BraTS-based multi-modal MRI glioma segmentation using the local dataset at `/mnt/d/brats2023` and the  Python environment with torch.
+This repository implements the coursework pipeline for BraTS-based multi-modal MRI glioma segmentation. The dataset is downloaded from HuggingFace (`Angelou0516/brats2023-gli-dataset`) and trained on 4× NVIDIA RTX 5090 GPUs (32GB each) with bf16 mixed precision.
 
 ## Implemented scope
 
 - Task 1: NIfTI loading, z-score normalization, foreground cropping, WT/TC/ET label transformation, visualization, and ET contrast analysis.
 - Task 2: 2D slice dataset, augmentation, baseline U-Net, Dice+BCE loss, training, validation Dice, and loss-curve export.
 - Task 3: Attention U-Net upgrade, HD95 evaluation, and prediction figure generation.
+- **Task 4**: Pretrained model fine-tuning (SAM, SegFormer+Lora) with bf16 AMP and multi-GPU parallel training.
 
 ## Quick start
 
 ```bash
+# 1. Install the package
 python -m pip install -e .
-python scripts/run_task1_analysis.py
-python scripts/prepare_cache.py --cache-dir artifacts/preprocessed_cache --slices-per-case 32 --overwrite
-python scripts/train_model.py --model unet --epochs 45 --output-dir artifacts/baseline --batch-size 128
-python scripts/train_model.py --model attention_unet --epochs 10 --output-dir artifacts/attention --batch-size 32 --loss `dice_bce|dice_focal`
-python scripts/train_model.py --model modality_attention_unet --epochs 10 --output-dir artifacts/modality_attention_unet  --batch-size 32
-python scripts/train_all_models.py --model deep_attention_unet --epochs 10 --batch-size 32 --splits artifacts/preprocessed_cache/splits.json --cache-dir artifacts/preprocessed_cache --output-dir artifacts/deep_attention_unet
-python scripts/visualize_predictions.py --model unet --checkpoint artifacts/baseline/best_model.pt --splits artifacts/preprocessed_cache/splits.json --output-dir artifacts/prediction_examples
-python scripts/evaluate_model.py --model attention_unet --checkpoint artifacts/attention/best_model.pt --output-dir artifacts/eval_attention
+
+# 2. Download 30-case BraTS subset
+python scripts/download_brats_subset.py
+
+# 3. Prepare preprocessed cache
+python scripts/prepare_cache.py --data-root data/brats2023 --cache-dir artifacts/preprocessed_cache --slices-per-case 32 --overwrite
+
+# 4. Train models (example commands)
+python scripts/train_model.py --model unet --epochs 45 --output-dir artifacts/baseline --batch-size 128 --data-root data/brats2023
+python scripts/train_model.py --model attention_unet --epochs 10 --output-dir artifacts/attention --batch-size 32 --data-root data/brats2023
+python scripts/train_all_models.py --model swin_unetr --epochs 15 --batch-size 64 --amp --data-root data/brats2023 --splits artifacts/preprocessed_cache/splits.json --cache-dir artifacts/preprocessed_cache --output-dir artifacts/swin_unetr
+
+# 5. Evaluate
+python scripts/evaluate_model.py --model attention_unet --checkpoint artifacts/attention/best_model.pt --output-dir artifacts/eval_attention --data-root data/brats2023
 ```
 
-`prepare_cache.py` samples raw slices before preprocessing when `--slices-per-case` is set, then writes preprocessed case data and `artifacts/preprocessed_cache/splits.json`; `train_model.py` reuses them and creates `--aug-samples-per-slice` random augmented samples per cached slice on the fly.
+**Note**: All commands now accept `--data-root` to specify the BraTS dataset location. Default: `data/brats2023`.
 
 ## SAM-like pretrained model fine-tuning
 
 This project supports fine-tuning a SAM (Segment Anything Model) style pretrained model for BraTS segmentation via `scripts/finetune_sam.py`.
 
+**Key features (v2):**
+- `--amp` (default on): bf16 mixed precision via `torch.amp.autocast`
+- `--grad-accum-steps N`: Gradient accumulation for larger effective batch sizes
+- `--gpu 0`: Per-GPU device selection via `CUDA_VISIBLE_DEVICES`
+- `--resume checkpoint.pt`: Resume training from saved checkpoint
+- `--batch-size 64`: Larger default batch size for 32GB GPUs
+- GPU memory reporting in progress bar (alloc/cache)
+
 **Two modes:**
 
-- **`--source vit`** (default) — pure-PyTorch ViT encoder, no external dependencies, random init. Use for testing the pipeline.
-- **`--source sam`** — loads Meta's actual SAM weights. Requires the `segment-anything` package and a pretrained checkpoint.
+- **`--source vit`** (default) — pure-PyTorch ViT encoder, no external dependencies, random init.
+- **`--source sam`** — loads Meta's actual SAM weights. Requires `segment-anything` and a pretrained checkpoint.
 
 ```bash
-# Standalone mode (random init, no download needed)
-python scripts/finetune_sam.py --source vit --epochs 5
+# Standalone mode (ViT-B, bf16, bs=64)
+python scripts/finetune_sam.py --source vit --epochs 15 --batch-size 64 --amp
 
 # Full SAM mode (requires checkpoint from Meta)
-pip install brats-seg[sam]
+pip install segment-anything
 wget https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth
 python scripts/finetune_sam.py --source sam \
-    --checkpoint sam_vit_b_01ec64.pth --epochs 15
+    --checkpoint sam_vit_b_01ec64.pth --epochs 15 --batch-size 32 --amp
 ```
 
-The SAM adapter (`src/brats_seg/models/sam_adapter.py`) automatically adapts SAM's 3-channel RGB image encoder to BraTS's 4-modality input by duplicating the nearest pretrained channel, and replaces SAM's mask decoder with a lightweight conv head outputting 3 regions (WT, TC, ET). The ViT encoder can be frozen (default) or fine-tuned end-to-end.
+## SegFormer LoRA Fine-tuning (PEFT)
 
-**Device auto-detection:** All training scripts use `get_device()` to automatically select CUDA (NVIDIA), ROCm (AMD), MPS (Apple Silicon), XPU (Intel), or CPU fallback.
-
-## Region-specific modality attention
-
-`RegionModalityAttentionUNet2D` adds a modality-attention stage before Attention U-Net and can be trained with `python scripts/train_model.py --model modality_attention_unet`. For each output region `r` in `(WT, TC, ET)`, the model learns a separate softmax distribution over the four MRI modalities `(t1c, t1n, t2f, t2w)`:
-
-```text
-a_r = softmax(alpha_r),  a_r in R^4
-x_r[c, h, w] = a_r[c] * x[c, h, w]
-y_r = AttentionUNet_r(x_r)
-y = concat(y_WT, y_TC, y_ET)
-```
-
-This lets different tumor regions emphasize different modalities before the image enters Attention U-Net. The learned weights are saved to `learned_modality_attention.json` after training.
-
-## Deep Attention U-Net
-
-`DeepSupAttentionUNet2D` is trained through `scripts/train_all_models.py`, because this script supports models with auxiliary deep-supervision outputs. The model returns the final prediction plus three auxiliary decoder predictions during training, and `train_all_models.py` combines their losses automatically.
-
-Train it with the cached split:
+Fine-tune HuggingFace SegFormer models with Low-Rank Adaptation (LoRA) for parameter-efficient transfer learning on BraTS.
 
 ```bash
-python scripts/train_all_models.py --model deep_attention_unet --epochs 10 --batch-size 32 --splits artifacts/preprocessed_cache/splits.json --cache-dir artifacts/preprocessed_cache --output-dir artifacts/deep_attention_unet
+python scripts/finetune_segformer.py \
+    --model nvidia/mit-b0 \
+    --data-root data/brats2023 \
+    --output-dir artifacts/segformer_b0_lora \
+    --epochs 20 --batch-size 32 --lr 5e-4 --amp
 ```
 
-The script writes `best_model.pt`, `best_metrics.json`, `history.json`, `history.csv`, and `loss_curve.png` under the chosen output directory.
+**Key features:**
+- PEFT LoRA (r=16, α=32) targeting `query` and `value` attention projections
+- `--use-4channel`: Widen first conv layer to accept 4 BraTS modalities natively
+- `--grad-accum-steps`: Gradient accumulation for large effective batch
+- `--gpu`: Per-GPU device selection
+- `--resume`: Resume from saved LoRA adapter checkpoint
+
+### Multi-GPU Parallel Training
+
+Run 4 models simultaneously on 4 GPUs for maximum utilization:
+
+```bash
+bash scripts/multigpu_launch.sh
+```
+
+This launches:
+| GPU | Model | Batch | Config |
+|-----|-------|-------|--------|
+| 0 | SAM ViT-B (full FT) | 64 | bf16, 88.3M trainable |
+| 1 | SAM ViT-B (frozen enc) | 96 | bf16, 2.4M trainable |
+| 2 | SwinUNETR2D | 64 | bf16, AMP |
+| 3 | SegFormer-B0 LoRA | 32 | bf16, PEFT |
+
+## Architecture Comparison (7 models + pretrained)
+
+| Model | Params | Dice WT | Dice TC | Dice ET |
+|-------|--------|---------|---------|---------|
+| UNet2D | 7.76M | 0.871 | 0.726 | 0.723 |
+| AttentionUNet2D | 7.85M | 0.886 | 0.738 | 0.806 |
+| ResEncUNet2D | 7.66M | 0.886 | 0.689 | 0.779 |
+| SegResNet2D | 4.15M | **0.904** | 0.665 | 0.733 |
+| SwinUNETR2D | 6.90M | 0.898 | 0.586 | 0.729 |
+| DeepSupAttnUNet2D | 8.63M | 0.865 | **0.784** | **0.814** |
+| SAM ViT-B (frozen) | 88.3M | 0.534¹ | 0.379¹ | 0.352¹ |
+| SAM ViT-B (full FT) | 88.3M | — | — | — |
+
+¹ Partial (2 epochs); full training in progress.
+
+## Environment
+
+- Python 3.14, PyTorch 2.11+cu128, Transformers 5.9.0
+- PEFT 0.19.1, Accelerate 1.13.0
+- 4× NVIDIA RTX 5090 (32GB VRAM each)
+- CUDA 12.9, Driver 575.64.03

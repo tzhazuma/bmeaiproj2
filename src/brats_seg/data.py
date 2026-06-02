@@ -52,9 +52,20 @@ def discover_cases(data_root: str | Path = DEFAULT_DATA_ROOT) -> list[BraTSCase]
     cases: list[BraTSCase] = []
     for case_dir in case_dirs:
         case_id = case_dir.name
-        modality_paths = {modality: case_dir / f"{case_id}-{modality}.nii" for modality in MODALITIES}
-        seg_path = case_dir / f"{case_id}-seg.nii"
-        if not all(path.exists() for path in modality_paths.values()) or not seg_path.exists():
+        def _find_file(case_dir: Path, case_id: str, suffix: str) -> Path | None:
+            for ext in (".nii", ".nii.gz"):
+                p = case_dir / f"{case_id}-{suffix}{ext}"
+                if p.exists():
+                    return p
+            return None
+        modality_paths = {}
+        for modality in MODALITIES:
+            p = _find_file(case_dir, case_id, modality)
+            if p is None:
+                break
+            modality_paths[modality] = p
+        seg_path = _find_file(case_dir, case_id, "seg")
+        if not modality_paths or seg_path is None:
             continue
         cases.append(BraTSCase(case_id=case_id, case_dir=case_dir, modality_paths=modality_paths, seg_path=seg_path))
     return cases

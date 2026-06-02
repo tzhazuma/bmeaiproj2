@@ -180,6 +180,82 @@ DeepSupAttentionUNet2D & 8.63M & \textbf{0.821} \\
   \item \textbf{GPU memory}: The 8GB RTX 4060 constrains batch size (1--2), limiting the effectiveness of BatchNorm and potentially slowing convergence.
 \end{itemize}
 
+\section{Pretrained Model Transfer Learning and PEFT}
+\label{sec:pretrained}
+
+Building on the custom architectures in Section~3, we explore transfer learning with large-scale pretrained models and Parameter-Efficient Fine-Tuning (PEFT) techniques, leveraging 4$\times$ NVIDIA RTX 5090 GPUs (32GB each) for accelerated experimentation.
+
+\subsection{SAM-based Fine-tuning (Segment Anything Model)}
+
+SAM (Kirillov et al., ICCV 2023) is a vision foundation model pretrained on 11M images with 1.1B masks. We adapt SAM for BraTS via:
+
+\begin{itemize}
+  \item \textbf{Input adaptation}: SAM's 3-channel ViT encoder is widened to 4 channels by duplicating the nearest pretrained channel weights, preserving the semantic initialization for all BraTS modalities (T1c, T1n, T2f, T2w).
+  \item \textbf{Decoder replacement}: SAM's prompt-based mask decoder is replaced with a lightweight convolutional decoder head (2$\times$ upsampling + output projection) producing 3-channel segmentation maps for WT, TC, and ET.
+  \item \textbf{Two fine-tuning modes}: (a) \textit{Decoder-only}: freeze the ViT-B encoder (86M params) and train only the decoder head (2.4M params); (b) \textit{End-to-end}: unfreeze the full 88.3M parameters with gradient checkpointing.
+\end{itemize}
+
+\textbf{Implementation}: \texttt{scripts/finetune\_sam.py} with \texttt{brats\_seg.models.sam\_adapter}. Supports bf16 mixed precision, gradient accumulation, checkpoint resumption, and per-GPU device selection.
+
+\subsection{SegFormer with PEFT/LoRA}
+
+SegFormer (Xie et al., NeurIPS 2021) is a hierarchical Transformer encoder (MiT) with a lightweight MLP decoder, pretrained on ImageNet-1k/22k. We apply Low-Rank Adaptation (LoRA; Hu et al., ICLR 2022) for parameter-efficient fine-tuning:
+
+\begin{itemize}
+  \item \textbf{Model}: \texttt{nvidia/mit-b0} (3.8M backbone) from HuggingFace transformers.
+  \item \textbf{LoRA configuration}: rank $r=16$, $\alpha=32$, targeting \texttt{query} and \texttt{value} attention projections. The \texttt{decode\_head} is trained fully via \texttt{modules\_to\_save}.
+  \item \textbf{Channel adaptation}: 4 BraTS modalities $\rightarrow$ 3-channel pseudo-RGB by selecting \{T1c, T2f, T2w\} (most discriminative channels). Optional surgical 4-channel widening available via \texttt{--use-4channel}.
+  \item \textbf{Training}: 20 epochs, AdamW ($lr=5\times10^{-4}$), CosineAnnealingWarmRestarts, bf16 AMP, gradient accumulation.
+\end{itemize}
+
+\textbf{Implementation}: \texttt{scripts/finetune\_segformer.py} using \texttt{peft.LoraConfig} and \texttt{get\_peft\_model}.
+
+\subsection{Multi-GPU Parallel Training}
+
+To maximize throughput on 4$\times$ RTX 5090 (128GB total VRAM), we run independent model instances on separate GPUs via \texttt{CUDA\_VISIBLE\_DEVICES}:
+
+\begin{itemize}
+  \item \textbf{GPU 0}: SAM ViT-B end-to-end (88.3M trainable, bs=64, bf16).
+  \item \textbf{GPU 1}: SAM ViT-B decoder-only (2.4M trainable, bs=96, grad-accum=2).
+  \item \textbf{GPU 2}: SwinUNETR2D from scratch (6.9M, bs=64, bf16 AMP).
+  \item \textbf{GPU 3}: ResEncUNet2D with deep supervision (7.7M, bs=128, bf16 AMP).
+\end{itemize}
+
+This embarrassingly parallel setup avoids inter-GPU communication overhead while enabling direct comparison across training strategies. For data-parallel single-model scaling (e.g., SegFormer with larger effective batch), \texttt{accelerate} + FSDP FULL\_SHARD is the recommended approach per the HuggingFace distributed training guide.
+
+\subsection{Pretrained Model Results}
+
+Table~\ref{tab:pretrained_results} summarizes pretrained model fine-tuning performance on the 30-case BraTS subset. SAM models were trained for 15 epochs with bf16 precision.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcccccc}
+\toprule
+\textbf{Model} & \textbf{\#Params} & \textbf{Trainable} & \textbf{Dice WT} & \textbf{Dice TC} & \textbf{Dice ET} & \textbf{HD95 WT} \\
+\midrule
+SAM ViT-B (frozen)   & 88.3M & 2.4M  & 0.534 & 0.379 & 0.352 & 19.90 \\
+SAM ViT-B (full FT)  & 88.3M & 88.3M & \textit{training} & -- & -- & -- \\
+SwinUNETR2D (scratch)& 6.9M  & 6.9M  & 0.669 & 0.472 & 0.538 & 32.50 \\
+ResEncUNet2D (scratch)& 7.7M & 7.7M  & 0.636 & 0.577 & 0.597 & 47.12 \\
+SegFormer-B0 (LoRA)  & 3.8M  & $\sim$0.6M & \textit{training} & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\caption{Pretrained model fine-tuning and multi-GPU training results. SAM ViT-B (frozen) results from 2 epochs; full training in progress. SwinUNETR2D and ResEncUNet2D trained from scratch for 15 epochs on 30 cases with bf16 AMP and large batch sizes.}
+\label{tab:pretrained_results}
+\end{table}
+
+\subsection{Literature Context: SOTA in Medical Image Segmentation}
+
+Recent advances in medical image segmentation relevant to our approach include:
+
+\begin{itemize}
+  \item \textbf{MedNeXt} (MICCAI 2023/2025): ConvNeXt-based 3D U-Net architectures achieving SOTA on BraTS 2024-2025 challenges (DSC $\sim$0.90). The PEFT\_MedNeXt variant uses convolutional adapters for domain transfer.
+  \item \textbf{MedSAM / MedSAM2} (Nature Comms 2024; 2025): SAM fine-tuned on 1M+ medical images, demonstrating that promptable foundation models generalize to medical domains with proper adaptation.
+  \item \textbf{SegMamba / U-Mamba} (2024): State-space models for 3D medical segmentation, outperforming SwinUNETR on BraTS 2023 (avg DSC 0.913 vs 0.894).
+  \item \textbf{PDoRA} (Scientific Reports 2025): Principal weight decomposition + LoRA achieves +5.73\% Dice over full fine-tuning on brain metastasis segmentation with rank $r=16$.
+  \item \textbf{HyPS} (arXiv 2024): PiSSA + adapter for SwinUNETR updates only 31.8\% of parameters while achieving +1.16\% Dice with 10 training samples.
+\end{itemize}
+
 \section{Use of AI Tools}
 AI assistance was used for code orchestration, architecture implementation, experiment automation, ablation analysis, and LaTeX drafting. All generated code paths were manually verified through script execution, unit tests, and artifact inspection.
 

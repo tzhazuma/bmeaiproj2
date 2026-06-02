@@ -23,7 +23,7 @@ NUM_CASES = 30
 
 
 def main() -> None:
-    target_root = Path("/home/azuma/bmeaiproj2/data/brats2023")
+    target_root = Path("/home/tangzh/bmeaiproj2/data/brats2023")
     target_root.mkdir(parents=True, exist_ok=True)
 
     print("=== Listing repo files ===", flush=True)
