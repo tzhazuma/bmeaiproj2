@@ -49,6 +49,7 @@ from peft import LoraConfig, get_peft_model
 from brats_seg.constants import DEFAULT_DATA_ROOT
 from brats_seg.data import (
     BraTSSliceDataset,
+    CachedBraTSSliceDataset,
     discover_cases,
     limit_cases,
     stable_split_cases,
@@ -166,6 +167,7 @@ def parse_args() -> argparse.Namespace:
         help="Mixed precision mode",
     )
     parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--cache-dir", default="", help="Use preprocessed cache for fast loading")
 
     # outputs
     parser.add_argument("--output-dir", default="artifacts/segformer_lora")
@@ -250,6 +252,11 @@ def evaluate(
         image = batch["image"]  # type: ignore[assignment]
         target = batch["target"]  # type: ignore[assignment]
 
+        # Move to correct device (val_loader is not prepared by accelerator)
+        device = next(unwrapped.parameters()).device
+        image = image.to(device)
+        target = target.to(device)
+
         outputs = unwrapped(pixel_values=image)
         logits = outputs.logits
         logits = F.interpolate(
@@ -288,10 +295,13 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Accelerator ──────────────────────────────────────────────────────
+    # NOTE: mixed_precision is always disabled for SegFormer.
+    # SegFormer's multi-stage patch embeddings crash with bf16 under
+    # Accelerator because intermediate hidden states get converted back to
+    # float32 between stages, causing "Input type (float) and bias type
+    # (c10::BFloat16) should be the same" errors.
     accelerator = Accelerator(
-        mixed_precision=args.mixed_precision
-        if args.mixed_precision != "no"
-        else None,
+        mixed_precision="no",
         gradient_accumulation_steps=args.grad_accum,
     )
 
@@ -308,16 +318,26 @@ def main() -> None:
     cases = limit_cases(cases, args.max_cases or None)
     splits = stable_split_cases(cases)
 
-    base_train = BraTSSliceDataset(
-        splits["train"],
-        include_empty=args.include_empty,
-        augment=True,
-    )
-    base_val = BraTSSliceDataset(
-        splits["val"],
-        include_empty=False,
-        augment=False,
-    )
+    use_cache = args.cache_dir and Path(args.cache_dir).exists()
+    if use_cache and accelerator.is_main_process:
+        print(f"Using preprocessed cache: {args.cache_dir}")
+
+    if use_cache:
+        base_train = CachedBraTSSliceDataset(
+            splits["train"], cache_dir=args.cache_dir,
+            include_empty=args.include_empty, augment=True,
+        )
+        base_val = CachedBraTSSliceDataset(
+            splits["val"], cache_dir=args.cache_dir,
+            include_empty=False, augment=False,
+        )
+    else:
+        base_train = BraTSSliceDataset(
+            splits["train"], include_empty=args.include_empty, augment=True,
+        )
+        base_val = BraTSSliceDataset(
+            splits["val"], include_empty=False, augment=False,
+        )
 
     # Wrap for 3-channel SegFormer input (skip wrapper when using 4ch surgery)
     if args.use_4channel:
