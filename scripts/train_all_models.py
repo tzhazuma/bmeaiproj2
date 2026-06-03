@@ -51,6 +51,7 @@ from brats_seg.models import (
     UNet2D,
     AttentionUNet2D,
     DeepSupAttentionUNet2D,
+    MAUNet2D,
     MedNeXt2D,
     ResEncUNet2D,
     SegResNet2D,
@@ -59,7 +60,7 @@ from brats_seg.models import (
 from brats_seg.device import get_device
 from brats_seg.visualization import save_loss_curve
 
-MODEL_DEEP_SUP = {"resenc_unet", "deep_attention_unet"}
+MODEL_DEEP_SUP = {"resenc_unet", "deep_attention_unet", "maunet"}
 MODEL_VAE = {"segresnet"}
 MODEL_CHECKPOINT = {"swin_unetr", "mednext", "resenc_unet"}
 
@@ -87,6 +88,9 @@ def create_backbone(model_name: str, in_channels: int, out_channels: int, use_ch
 
     if model_name == "deep_attention_unet":
         return DeepSupAttentionUNet2D(**common_2d)
+
+    if model_name == "maunet":
+        return MAUNet2D(**common_2d)
 
     if model_name == "mednext":
         return MedNeXt2D(**common_2d, use_checkpoint=use_checkpoint)
@@ -278,6 +282,7 @@ def main() -> None:
             "attention_unet",
             "resenc_unet",
             "deep_attention_unet",
+            "maunet",
             "mednext",
             "segresnet",
             "swin_unetr",

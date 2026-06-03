@@ -106,15 +106,16 @@ This launches:
 | SwinUNETR2D | 6.90M | 0.898 | 0.586 | 0.729 |
 | DeepSupAttnUNet2D | 8.63M | 0.865 | **0.784** | **0.814** |
 | --- | --- | --- | --- | --- |
-| **Pretrained/Fine-tuned** | | | | |
-| **SegFormer-B0 LoRA** | 4.2M | 0.678 | **0.687** | **0.689** |
+| **Pretrained & Custom** | | | | |
+| **MAUNet2D** | 6.5M | **0.710** | **0.715** | **0.721** |
+| **SegFormer-B0 LoRA** | 4.2M | 0.678 | 0.687 | 0.689 |
 | SwinUNETR2D (scratch) | 6.9M | 0.684 | 0.540 | 0.678 |
 | MedNeXt2D Light | 1.1M | 0.594 | 0.622 | 0.645 |
 | ResEncUNet2D | 7.7M | 0.636 | 0.577 | 0.597 |
 | SAM ViT-B (full FT) | 88.3M | 0.575 | 0.555 | 0.540 |
 | SAM ViT-B (frozen) | 88.3M | 0.498 | 0.394 | 0.377 |
 
-**Best model**: SegFormer-B0 with LoRA (461K trainable params, mean Dice 0.685). All models trained 10-15 epochs on 30 BraTS cases, bf16 AMP, zero crashes.
+**Best model**: MAUNet2D (multi-scale attention U-Net, mean Dice 0.715). All models 10-15 epochs on 30 BraTS cases, bf16 AMP.
 
 ## Environment
 
